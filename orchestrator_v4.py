@@ -19,6 +19,7 @@ from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, redirect
 
 import dotenv
+import auto_patch
 try:
     from ddgs import DDGS
     DDG_AVAILABLE = True
@@ -341,7 +342,7 @@ def call_openrouter(model, messages, max_tokens=1000, temperature=0.7):
         model,
         "meta-llama/llama-3.3-70b-instruct:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "openai/gpt-oss-120b:free",
+        "openai/gpt-oss-20b:free",
     ]
     # 重複除去（順序保持）
     seen = set()
@@ -384,6 +385,34 @@ def call_openrouter(model, messages, max_tokens=1000, temperature=0.7):
             continue
     raise Exception(f"OpenRouter全モデル失敗: {last_error}")
 
+
+
+def call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3):
+    """自動フォールバックなし・単発モデル呼び出し（パッチ生成の多モデル試行用）"""
+    r = requests.post(
+        OPENROUTER_BASE,
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "http://localhost:11437",
+            "X-Title": "Orchestrator v4"
+        },
+        json={
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "reasoning": {"exclude": True}
+        },
+        timeout=45
+    )
+    data = r.json()
+    if "choices" not in data:
+        raise Exception(data.get("error", {}).get("message", str(data)))
+    content = data["choices"][0]["message"]["content"] or ""
+    if not content.strip():
+        raise Exception("空応答")
+    return content
 
 
 def call_vision(text, image_b64, mime_type="image/jpeg"):
@@ -919,14 +948,136 @@ def summarize_history(conversation_history):
         lines.append('A' + str(i+1) + ': ' + a)
     return chr(10).join(lines)
 
+def _handle_patch_request(instruction, session_id):
+    """「、」「,」プレフィックスによるコード自動修正モード：パッチ生成→承認待ち保存"""
+    target_filename = None
+    for fname in auto_patch.ALLOWED_FILES:
+        if fname in instruction:
+            target_filename = fname
+            break
+    if not target_filename:
+        candidates = "\n".join(f"- {f}" for f in auto_patch.ALLOWED_FILES)
+        return {
+            "answer": f"⚠️ 対象ファイルを特定できませんでした。指示文に次のいずれかのファイル名を含めてください:\n{candidates}",
+            "model": "system", "source": "system"
+        }
+
+    def _llm_call_single(model, messages):
+        return call_openrouter_single(model, messages, max_tokens=4000, temperature=0.3)
+
+    log(f"🛠 パッチ生成開始: {target_filename} / {instruction[:50]}")
+    result = auto_patch.generate_and_validate_multi(target_filename, instruction, _llm_call_single)
+    if not result["ok"]:
+        errs = "\n".join(result["errors"])
+        log(f"❌ パッチ生成失敗（全モデル）: {errs[:500]}")
+        return {"answer": f"❌ パッチ生成に失敗しました（{target_filename}）\n全候補モデルで失敗:\n{errs[:1000]}", "model": "system", "source": "error"}
+    log(f"🛠 パッチ生成成功: model={result['model_used']}")
+
+    log(f"🛠 パッチ件数={len(result['patches'])} diff_len={len(result['diff'])}")
+    auto_patch.save_pending_patch(
+        CACHE_DB, session_id, target_filename, instruction,
+        result["patches"], result["old_content"], result["new_content"], result["diff"]
+    )
+    reasons = "\n".join(f"- {p.get('reason','(理由なし)')}" for p in result["patches"])
+    diff_preview = result["diff"][:3000]
+    answer = (
+        f"🛠️ {target_filename} への修正案を生成しました（使用モデル: {result['model_used']}）\n\n"
+        f"【変更理由】\n{reasons}\n\n"
+        f"【diff】\n```\n{diff_preview}\n```\n\n"
+        f"適用する場合は「承認」、取り消す場合は「キャンセル」と送ってください（10分で自動失効）"
+    )
+    log(f"🛠 パッチ生成成功・承認待ち: {target_filename}")
+    return {"answer": answer, "model": "auto_patch", "source": "patch_pending"}
+
+
+def _apply_pending_patch(session_id, pending):
+    """承認された保留パッチをファイルに適用（バックアップ→書き込み→構文再検証）"""
+    filename = pending["filename"]
+    try:
+        backup_path = auto_patch.backup_file(filename)
+        auto_patch.write_file(filename, pending["new_content"])
+        ok, err = auto_patch.validate_syntax(pending["new_content"])
+        if not ok:
+            auto_patch.restore_backup(filename, backup_path)
+            auto_patch.delete_pending_patch(CACHE_DB, session_id)
+            log(f"❌ 適用後の構文チェック失敗、ロールバック: {filename}")
+            return {"answer": f"❌ 書き込み後の構文チェックに失敗しロールバックしました\n{err}", "model": "system", "source": "error"}
+    except Exception as e:
+        log(f"❌ パッチ適用エラー: {filename} / {e}")
+        return {"answer": f"❌ 適用中にエラーが発生しました: {e}", "model": "system", "source": "error"}
+
+    auto_patch.delete_pending_patch(CACHE_DB, session_id)
+    log(f"✅ パッチ適用完了: {filename} / Backup: {backup_path}")
+
+    note = ""
+    if filename != "orchestrator_v4.py":
+        commit_msg = f"auto-patch: {filename} - {pending['instruction'][:80]}"
+        git_result = auto_patch.git_commit_and_push(auto_patch.ALLOWED_FILES[filename], commit_msg)
+        if git_result["skipped"]:
+            log(f"ℹ️ git連携スキップ: {git_result['reason']}")
+            note += f"\nℹ️ git: {git_result['reason']}"
+        elif git_result["ok"]:
+            log(f"✅ git commit+push成功: {filename}")
+            note += "\n✅ gitへcommit+push済み"
+        else:
+            log(f"❌ git連携失敗: {git_result['reason']}")
+            note += f"\n❌ git連携失敗: {git_result['reason']}"
+
+    if filename == "orchestrator_v4.py":
+        try:
+            monitor_script = os.path.expanduser("~/ai-orchestrator/monitor_restart.py")
+            monitor_log = os.path.expanduser("~/ai-orchestrator/monitor_restart.log")
+            meta_path = os.path.expanduser(f"~/ai-orchestrator/.pending_patch_meta_{session_id}.json")
+            with open(meta_path, "w", encoding="utf-8") as _metaf:
+                json.dump({"filename": filename, "instruction": pending["instruction"]}, _metaf, ensure_ascii=False)
+            with open(monitor_log, "a") as _mf:
+                subprocess.Popen(
+                    ["python3", monitor_script,
+                     "--backup", backup_path,
+                     "--target", auto_patch.ALLOWED_FILES[filename],
+                     "--before-boot", _BOOT_TIME,
+                     "--timeout", "30",
+                     "--meta", meta_path],
+                    stdout=_mf, stderr=_mf, start_new_session=True
+                )
+            subprocess.Popen(
+                ["bash", "-c", "sleep 3 && launchctl kickstart -k gui/$(id -u)/com.fk.orchestrator"],
+                start_new_session=True
+            )
+            log("🔄 自己修正検知: 3秒後に再起動をスケジュール、監視プロセス起動済み")
+            note = "\n🔄 オーケストレーター自身の修正のため、3秒後に自動再起動します（ヘルスチェック失敗時は自動ロールバック）。"
+        except Exception as e:
+            log(f"❌ 再起動スケジュールに失敗: {e}")
+            note = f"\n⚠️ 自動再起動のスケジュールに失敗しました。手動で再起動してください: {e}"
+
+    return {
+        "answer": f"✅ {filename} を更新しました\n📦 Backup: {backup_path}{note}",
+        "model": "system", "source": "patch_applied"
+    }
+
+
 def chat(question, session_id="default"):
     global conversation_histories
     conversation_history = conversation_histories.setdefault(session_id, [])
 
+    # ── コード修正パッチ承認/却下チェック(プレフィックス判定より先に処理) ──
+    _pending = auto_patch.get_pending_patch(CACHE_DB, session_id)
+    if _pending:
+        _stripped = question.strip()
+        if _stripped in ("承認", "はい", "OK", "ok", "Ok", "yes", "YES", "適用", "適用して"):
+            return _apply_pending_patch(session_id, _pending)
+        elif _stripped in ("キャンセル", "却下", "いいえ", "中止", "no", "NO"):
+            auto_patch.delete_pending_patch(CACHE_DB, session_id)
+            return {"answer": f"❌ 修正案（{_pending['filename']}）をキャンセルしました。", "model": "system", "source": "system"}
+
     # プレフィックス判定
+    is_patch  = question.startswith("、") or question.startswith(",")
     is_multi  = False  # 3Agentモード廃止
-    is_cloud  = question.startswith("。") or question.startswith(".")
-    clean_question = question.lstrip(".。").strip()
+    is_cloud  = (not is_patch) and (question.startswith("。") or question.startswith("."))
+    clean_question = question.lstrip("、,。.").strip()
+
+    if is_patch:
+        return _handle_patch_request(clean_question, session_id)
     prefix = "🌐" if is_cloud else "💬"
     log(f"{prefix} 質問: {clean_question[:50]}")
 
@@ -1308,6 +1459,7 @@ SESSION_TOKENS = set()  # 有効なセッショントークン
 def check_web_auth():
     """WebUIのCookie認証チェック"""
     token = request.cookies.get("web_session", "")
+    log(f"🔐 check_web_auth: token={token[:8] if token else 'None'}")
     return token in SESSION_TOKENS
 
 LOGIN_HTML = '''<!DOCTYPE html>
