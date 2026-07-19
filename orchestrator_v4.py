@@ -46,11 +46,6 @@ LLAMA_COMPLETION_BIN = os.path.expanduser("~/llama.cpp/build/bin/llama-completio
 LOCAL_MODEL_PATH = os.path.expanduser("~/ai-orchestrator/llama.cpp/models/llm-jp-3-1.8b-instruct3-Q4_K_M.gguf")
 LOCAL_MODEL_TIMEOUT = 300  # 秒（Intel Mac, CPU推論のため余裕を持たせる）
 
-# OpenCode CLI設定（3Agent並列(。。。)の1枠で使用。通常検索では使わない）
-OPENCODE_BIN = "/usr/local/bin/opencode"  # launchd環境はPATHが限定的なためフルパス指定
-OPENCODE_MODEL = "openrouter/openai/gpt-oss-120b:free"
-OPENCODE_TIMEOUT = 60  # 秒（CLIサブプロセス起動のオーバーヘッドを考慮）
-
 # ローカルVision設定（llama-mtmd-cli / SmolVLM-500M, 外部通信なし。通常モード+画像で使用）
 LLAMA_MTMD_BIN = os.path.expanduser("~/llama.cpp/build/bin/llama-mtmd-cli")
 VISION_MODEL_PATH = os.path.expanduser("~/ai-orchestrator/llama.cpp/models/smolvlm-500m-instruct-q8_0.gguf")
@@ -91,6 +86,25 @@ def version():
 
 LOG_FILE = "/Users/fk/Logs/orc.log"
 MEMORY_DB = os.path.expanduser("~/ai-agent/moltbook/memory.db")
+
+# ── 診断モード用：システム名 → ログファイルのマッピング ──────────────
+DIAGNOSIS_LOG_MAP = {
+    "オーケストレーター": ["/tmp/orchestrator.stderr.log", os.path.expanduser("~/ai-orchestrator/health_check.log")],
+    "orchestrator": ["/tmp/orchestrator.stderr.log", os.path.expanduser("~/ai-orchestrator/health_check.log")],
+    "moltbook": [os.path.expanduser("~/Logs/agent_claude.log")],
+    "エージェント": [os.path.expanduser("~/Logs/agent_claude.log")],
+    "mythofable": [
+        os.path.expanduser("~/Logs/watcher_stdout.log"),
+        os.path.expanduser("~/Logs/watcher_stderr.log"),
+        os.path.expanduser("~/Logs/dashboard_run.log"),
+    ],
+    "セキュリティ": [
+        os.path.expanduser("~/Logs/watcher_stdout.log"),
+        os.path.expanduser("~/Logs/watcher_stderr.log"),
+        os.path.expanduser("~/Logs/dashboard_run.log"),
+    ],
+}
+DIAGNOSIS_LOG_TAIL_LINES = 80
 
 def get_agent_context(question, max_comments=3):
     """memory.dbからagent_claudeの関連コメント・dreamsを取得"""
@@ -473,16 +487,9 @@ def ask_local(messages):
         history_lines = history_lines[:-1]
     summary = summarize_history(messages)
     summary_part = "[会話要約]" + chr(10) + summary + chr(10) + chr(10) if summary else ""
-    _edit_mode = any(k in last_user_msg for k in [
-        "修正して",
-        "修正してください",
-        "変更して",
-        "変更してください",
-        "改善して",
-        "リファクタリング",
-        "バグを直して",
-        "コードを修正",
-    ])
+    # 廃止: 旧ローカル即書き込みモード(承認なし・git連携なし)。
+    # 編集意図の判定・ルーティングはchat()側でauto_patchフローに統一済みのため、常にFalse固定。
+    _edit_mode = False
 
     # ===== AIエージェントモード =====
     # 「○○を修正して」のような指示だけで対象ファイルを自動で読み込み、
@@ -948,6 +955,99 @@ def summarize_history(conversation_history):
         lines.append('A' + str(i+1) + ': ' + a)
     return chr(10).join(lines)
 
+
+def _collect_diagnosis_logs(system_key):
+    """指定システムのログファイル群から直近N行を収集して結合する"""
+    paths = DIAGNOSIS_LOG_MAP.get(system_key, [])
+    collected = []
+    for p in paths:
+        if not os.path.exists(p):
+            continue
+        try:
+            with open(p, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+            tail = lines[-DIAGNOSIS_LOG_TAIL_LINES:]
+            if tail:
+                collected.append(f"=== {p} (直近{len(tail)}行) ===\n" + "".join(tail))
+        except Exception as e:
+            collected.append(f"=== {p} ===\n(読み込み失敗: {e})")
+    return "\n\n".join(collected)
+
+
+def _detect_diagnosis_system(instruction):
+    """指示文からDIAGNOSIS_LOG_MAPのキーに一致するシステム名を検出"""
+    for key in DIAGNOSIS_LOG_MAP:
+        if key in instruction:
+            return key
+    return None
+
+
+def _build_diagnosis_system_prompt():
+    file_list = "\n".join(f"- {f}" for f in auto_patch.ALLOWED_FILES)
+    return f"""あなたはシステムのログを分析し、修正すべき箇所を特定するアシスタントです。
+与えられたログの内容から、問題を1つ特定し、対応する修正方針を提案してください。
+
+filenameは必ず次の一覧の中から一字一句そのまま選ぶこと(このリスト以外の名前や省略形は使わないこと):
+{file_list}
+
+出力は以下のJSON形式のみ。説明文やMarkdownのコードブロック記号は一切含めないこと。
+{{"filename": "上記一覧からそのまま選んだファイル名", "instruction": "そのファイルへの具体的な修正指示(日本語、1〜2文)", "reason": "ログのどの部分からその判断をしたかの短い説明"}}
+ログに明確な問題が見当たらない場合、または一覧に該当するファイルがない場合は、{{"filename": null, "instruction": null, "reason": "理由"}} を返すこと。
+出力の最初の1文字は必ず "{{" にすること。
+"""
+
+def _handle_diagnosis_request(system_key, instruction, session_id):
+    """システム名をキーにログを収集し、LLMに問題特定＋修正案を提案させ、auto_patchフローに引き継ぐ"""
+    log(f"🩻 診断モード開始: system={system_key} / {instruction[:50]}")
+    logs = _collect_diagnosis_logs(system_key)
+    if not logs.strip():
+        return {
+            "answer": f"⚠️ {system_key} のログが見つからないか空でした。診断できません。",
+            "model": "system", "source": "system"
+        }
+
+    messages = [
+        {"role": "system", "content": _build_diagnosis_system_prompt()},
+        {"role": "user", "content": f"### システム: {system_key}\n\n### ログ内容\n{logs[:8000]}\n\n### 依頼内容\n{instruction}"}
+    ]
+
+    diag_errors = []
+    diag_result = None
+    for model in auto_patch.PATCH_CANDIDATE_MODELS:
+        try:
+            raw = call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3)
+        except Exception as e:
+            diag_errors.append(f"[{model}] API呼び出し失敗: {e}")
+            continue
+        try:
+            parsed = auto_patch.extract_json_object(raw)
+        except Exception as e:
+            diag_errors.append(f"[{model}] JSON解析失敗: {e}")
+            continue
+        if not parsed.get("filename"):
+            diag_errors.append(f"[{model}] 問題なしと判定: {parsed.get('reason','(理由なし)')}")
+            continue
+        if parsed["filename"] not in auto_patch.ALLOWED_FILES:
+            diag_errors.append(f"[{model}] 提案ファイル'{parsed['filename']}'がホワイトリスト外")
+            continue
+        diag_result = parsed
+        log(f"🩻 診断成功: model={model} filename={parsed['filename']} reason={parsed.get('reason','')[:100]}")
+        break
+
+    if not diag_result:
+        errs = "\n".join(diag_errors) if diag_errors else "(詳細不明)"
+        return {
+            "answer": f"❌ {system_key} のログ診断に失敗しました\n{errs[:1000]}",
+            "model": "system", "source": "error"
+        }
+
+    combined_instruction = f"{diag_result['filename']} {diag_result['instruction']}"
+    result_answer = _handle_patch_request(combined_instruction, session_id)
+    if isinstance(result_answer, dict) and "answer" in result_answer:
+        result_answer["answer"] = f"🩻 診断結果: {diag_result.get('reason','')}\n\n" + result_answer["answer"]
+    return result_answer
+
+
 def _handle_patch_request(instruction, session_id):
     """「、」「,」プレフィックスによるコード自動修正モード：パッチ生成→承認待ち保存"""
     target_filename = None
@@ -955,10 +1055,20 @@ def _handle_patch_request(instruction, session_id):
         if fname in instruction:
             target_filename = fname
             break
+
     if not target_filename:
+        diag_system = _detect_diagnosis_system(instruction)
+        if diag_system:
+            diag_result = _handle_diagnosis_request(diag_system, instruction, session_id)
+            if diag_result is not None:
+                return diag_result
         candidates = "\n".join(f"- {f}" for f in auto_patch.ALLOWED_FILES)
+        systems = "\n".join(f"- {s}" for s in DIAGNOSIS_LOG_MAP)
         return {
-            "answer": f"⚠️ 対象ファイルを特定できませんでした。指示文に次のいずれかのファイル名を含めてください:\n{candidates}",
+            "answer": (
+                f"⚠️ 対象ファイルを特定できませんでした。指示文に次のいずれかのファイル名を含めてください:\n{candidates}\n\n"
+                f"または、システム名を含めて「ログを確認して対応して」と依頼することもできます:\n{systems}"
+            ),
             "model": "system", "source": "system"
         }
 
@@ -1072,9 +1182,14 @@ def chat(question, session_id="default"):
 
     # プレフィックス判定
     is_patch  = question.startswith("、") or question.startswith(",")
-    is_multi  = False  # 3Agentモード廃止
     is_cloud  = (not is_patch) and (question.startswith("。") or question.startswith("."))
     clean_question = question.lstrip("、,。.").strip()
+
+    # ローカルモード(プレフィックスなし)でも編集意図のキーワードがあればauto_patchフローに統一
+    # (旧: ask_local()内の_edit_mode即書き込みルートは廃止・無効化済み)
+    _edit_kws = ["修正して", "修正してください", "変更して", "変更してください", "改善して", "リファクタリング", "バグを直して", "コードを修正", "対応して", "対応してください", "確認して対応", "ログを確認して"]
+    if not is_patch and not is_cloud and any(k in clean_question for k in _edit_kws):
+        is_patch = True
 
     if is_patch:
         return _handle_patch_request(clean_question, session_id)
@@ -1095,8 +1210,6 @@ def chat(question, session_id="default"):
                 log(f"💬 引継: ...{old_sid[-8:]} → ...{session_id[-8:]} ({len(old_hist)}件)")
                 return {"answer": f"✅ 引き継ぎ完了（`{code[:8]}`）\n{len(old_hist)}件の会話を読み込みました。続きから会話できます。", "model": "system", "source": "system"}
         return {"answer": f"⚠️ セッション `{code[:8]}` の履歴が見つかりませんでした。", "model": "system", "source": "system"}
-
-    # 3Agentモード廃止済み
 
     # DBから会話履歴を読み込み（メモリが空の場合）
     if not conversation_history:
@@ -1133,7 +1246,7 @@ def chat(question, session_id="default"):
     _ctx_dep_kws = ['それ', 'これ', 'その', 'あれ', 'もっと', '詳しく', '続き', '具体的', '使用例', '例を挙げ']
     _is_context_dependent = len(clean_question) < 25 and any(k in clean_question for k in _ctx_dep_kws)
 
-    # キャッシュ検索（;プレフィックス時はスキップ。3Agentは上のis_multi分岐で既に確認済み）
+    # キャッシュ検索（クラウドプレフィックス時はスキップ）
     if not is_cloud and not _is_context_dependent:
         cache_hit = cache_search(clean_question)
         if cache_hit:
@@ -1494,139 +1607,6 @@ def check_auth():
     token = request.headers.get("X-Token", "")
     return token == TOKEN
 
-def ask_multi_agent(question, agent_context=""):
-    """複数AIモデルに並列問い合わせ（役割分担、Web検索結果を共有コンテキストとして付与）"""
-    import concurrent.futures
-
-    if DDG_AVAILABLE:
-        search_result = search_web(question)
-        log(f"🌐 3Agent Web検索結果取得: {len(search_result)}文字")
-        search_context = f"\n\nWeb search results (use if relevant to the question):\n{search_result}"
-    else:
-        search_context = ""
-
-    agents = [
-        {
-            "name": "🛠️ OpenCode（メイン）",
-            "type": "opencode",
-            "role": f"あなたは優秀なAIアシスタントです。常に日本語で包括的に回答してください。思考過程は不要です。{search_context}"
-        },
-        {
-            "name": "🔍 Nemotron（批評）",
-            "type": "openrouter",
-            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
-            "role": f"あなたは批評的なアナリストです。常に日本語で、反論・別視点・限界点を簡潔に指摘してください。思考過程は不要です。{search_context}"
-        },
-        {
-            "name": "📚 Hermes（補足）",
-            "type": "openrouter",
-            "model": "nousresearch/hermes-3-llama-3.1-405b:free",
-            "role": f"あなたは知識の専門家です。常に日本語で、補足情報・具体例・見落とされがちな観点を簡潔に追加してください。思考過程は不要です。{search_context}"
-        },
-    ]
-
-    # フォールバックモデルリスト
-    fallback_models = [
-        "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "nousresearch/hermes-3-llama-3.1-405b:free",
-        "meta-llama/llama-3.2-3b-instruct:free",
-    ]
-
-    def query_opencode(agent):
-        """OpenCode CLI経由で問い合わせ（サブプロセス実行、cwd未指定でまず試す）"""
-        prompt = f"{agent['role']}\n\n質問: {question}"
-        try:
-            r = subprocess.run(
-                [OPENCODE_BIN, "run", "--model", OPENCODE_MODEL, prompt],
-                capture_output=True, text=True, timeout=OPENCODE_TIMEOUT
-            )
-            output = (r.stdout or "").strip()
-            if output:
-                log(f"multi-agent OpenCode 成功（{len(output)}文字）")
-                return agent["name"], output
-            err = (r.stderr or "不明なエラー")[:150]
-            log(f"multi-agent OpenCode 空応答（exit={r.returncode}）: {err}")
-        except subprocess.TimeoutExpired:
-            log(f"multi-agent OpenCode タイムアウト（{OPENCODE_TIMEOUT}秒）")
-        except FileNotFoundError:
-            log(f"multi-agent OpenCode コマンドが見つかりません（PATH要確認: launchd環境ではPATHが限定されることがあります）")
-        except Exception as e:
-            log(f"multi-agent OpenCode エラー: {str(e)[:100]}")
-        return agent["name"], "応答不可（OpenCode実行エラー、時間をおいて再試行してください）"
-
-    def query_agent(agent):
-        if agent.get("type") == "opencode":
-            return query_opencode(agent)
-        # メインモデルを試す
-        models_to_try = [agent["model"]] + [m for m in fallback_models if m != agent["model"]]
-        for model in models_to_try:
-            try:
-                r = requests.post(
-                    OPENROUTER_BASE,
-                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
-                    json={
-                        "model": model,
-                        "messages": [
-                            {"role": "system", "content": agent["role"]},
-                            {"role": "user", "content": question}
-                        ],
-                        "max_tokens": 600,
-                        "temperature": 0.7
-                    },
-                    timeout=30
-                )
-                data = r.json()
-                if "choices" in data:
-                    label = agent["name"] if model == agent["model"] else f"{agent['name']}（{model.split('/')[1][:15]}）"
-                    return label, data["choices"][0]["message"]["content"]
-                log(f"multi-agent {model} エラー: {data.get('error',{}).get('message','不明')[:50]}")
-            except Exception as e:
-                log(f"multi-agent {model} 接続エラー: {str(e)[:50]}")
-                continue
-        # Groqフォールバック
-        try:
-            log(f"multi-agent Groq フォールバック試行: {agent['name']}")
-            r = requests.post(
-                GROQ_BASE,
-                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "system", "content": agent["role"]}, {"role": "user", "content": question}], "max_tokens": 600},
-                timeout=30
-            )
-            data = r.json()
-            if "choices" in data:
-                log(f"multi-agent Groq 成功: {agent['name']}")
-                return f"{agent['name']}（Groq）", data["choices"][0]["message"]["content"]
-            log(f"multi-agent Groq 応答エラー: {data.get('error',{}).get('message','不明')[:80]}")
-        except Exception as e:
-            log(f"multi-agent Groq エラー: {str(e)[:80]}")
-        return agent["name"], "全モデル応答不可（時間をおいて再試行してください）"
-
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        futures = {executor.submit(query_agent, agent): agent for agent in agents}
-        for future in concurrent.futures.as_completed(futures):
-            name, answer = future.result()
-            results.append((name, answer))
-
-    # 順番を保持（Groqフォールバック時も含む）
-    ordered = []
-    for agent in agents:
-        for name, answer in results:
-            if agent["name"] in name:  # 部分一致で照合
-                ordered.append((name, answer))
-                break
-        else:
-            # 見つからない場合はそのまま追加
-            for name, answer in results:
-                if name not in [o[0] for o in ordered]:
-                    ordered.append((name, answer))
-                    break
-
-    log(f"🤖 ordered件数: {len(ordered)}")
-    return ordered if ordered else results
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -1674,11 +1654,10 @@ def chat_api():
     req_session_id = data.get('session_id', 'default')
 
     if image_b64:
-        img_is_multi = False  # 3Agentモード廃止
         img_is_cloud = question.startswith("。") or question.startswith(".")
         img_clean_q = question.lstrip(".。").strip()
 
-        if not img_is_cloud and not img_is_multi:
+        if not img_is_cloud:
             # 通常モード: OCR(原寸)+ローカルVision（リサイズ済み）を使用、外部通信なし
             import tempfile
             import base64 as _b64
@@ -1739,10 +1718,7 @@ def chat_api():
         # 元のメッセージのプレフィックス（。/。。。）を保持し、結合後も判定できるようにする
         prefix_str = ""
         q_rest = question
-        if False:  # 3Agentモード廃止
-            prefix_str = "。。。"
-            q_rest = q_rest.lstrip(".。").strip()
-        elif q_rest.startswith("。") or q_rest.startswith("."):
+        if q_rest.startswith("。") or q_rest.startswith("."):
             prefix_str = "。"
             q_rest = q_rest.lstrip(".。").strip()
         composed_question = (
@@ -1803,6 +1779,7 @@ a.back { display: inline-block; margin-top: 20px; color: #4caf50; text-decoratio
 <tr><th>プレフィックス</th><th>モード</th><th>キャッシュ</th><th>Web検索</th><th>LLM</th></tr>
 <tr><td>（なし）</td><td>通常</td><td><span class="badge yes">✅ 使う</span></td><td><span class="badge no">❌</span></td><td>ローカルLLM（llm-jp-3-1.8B, llama.cpp, 外部通信なし）</td></tr>
 <tr><td>。</td><td>クラウド</td><td><span class="badge no">❌</span></td><td><span class="badge yes">✅ DDG</span></td><td>OpenRouter（高精度）</td></tr>
+<tr><td>、 または ,</td><td>コード自動修正</td><td><span class="badge no">❌</span></td><td><span class="badge no">❌</span></td><td>OpenRouter（複数モデル自動フォールバック）</td></tr>
 
 </table>
 
@@ -1811,6 +1788,35 @@ a.back { display: inline-block; margin-top: 20px; color: #4caf50; text-decoratio
 <tr><th>シーン</th><th>おすすめ</th></tr>
 <tr><td>普通の質問</td><td>（なし）— キャッシュヒット時は瞬時、未ヒット時はローカルLLM（外部通信なし）</td></tr>
 </table>
+
+<h2>🛠️ コード自動修正＋git連携</h2>
+<table>
+<tr><th>ステップ</th><th>内容</th></tr>
+<tr><td>①指示</td><td><code>、</code>/<code>,</code>で始めるか、通常モードで「修正して」「対応して」等のキーワードを含めて依頼</td></tr>
+<tr><td>②パッチ生成</td><td>複数の無料モデルを順に試行（成功するまで自動フォールバック）。対象ファイルは事前登録されたホワイトリストのみ</td></tr>
+<tr><td>③diff確認</td><td>変更差分が提示される。この時点ではファイルは書き換わらない</td></tr>
+<tr><td>④承認/却下</td><td>「承認」「はい」「OK」等で適用、「キャンセル」「却下」等で取り消し（10分で自動失効）</td></tr>
+<tr><td>⑤適用</td><td>バックアップ作成→書き込み→構文再検証。オーケストレーター自身のファイルの場合は自動再起動＋ヘルスチェック（失敗時は自動ロールバック）</td></tr>
+<tr><td>⑥git連携</td><td>適用成功（自己修正の場合はヘルスチェック成功）後、対象がgitリポジトリならcommit+push。リポジトリでなければスキップ</td></tr>
+</table>
+
+<h3 style="font-size:13px;color:#9c27b0;margin:14px 0 6px;">📋 対象ファイル（ホワイトリスト）</h3>
+<table>
+<tr><th>システム</th><th>ファイル</th></tr>
+<tr><td>オーケストレーター</td><td>orchestrator_v4.py</td></tr>
+<tr><td>Moltbook</td><td>agent_claude.py / agent_log_doctor.py</td></tr>
+<tr><td>MythoFable</td><td>dashboard.py / log_watcher.py / auto_patcher.py / auto_recovery.py / exit_node_monitor.py / ip_manager.py / mythofable_s.py / proxy_watcher.py</td></tr>
+</table>
+
+<h3 style="font-size:13px;color:#9c27b0;margin:14px 0 6px;">🩻 診断モード（ログから自動で問題特定）</h3>
+<p class="note">対象ファイル名が分からない場合、システム名を含めて「〇〇のログを確認して対応して」と依頼すると、直近のログを自動収集しLLMが問題箇所と修正方針を提案します（その後は通常のパッチ生成フローに合流）。</p>
+<table>
+<tr><th>システム名の例</th><th>参照ログ</th></tr>
+<tr><td>オーケストレーター / orchestrator</td><td>起動エラーログ・死活監視ログ</td></tr>
+<tr><td>moltbook / エージェント</td><td>agent_claude.log</td></tr>
+<tr><td>mythofable / セキュリティ</td><td>watcher/dashboardのログ</td></tr>
+</table>
+<p class="note" style="margin-top:8px;">💡 例：「moltbookのログを確認して対応して」「MythoFableのログを確認して対応して」</p>
 
 <h2>🔑 セッションと会話の引き継ぎ</h2>
 <table>
