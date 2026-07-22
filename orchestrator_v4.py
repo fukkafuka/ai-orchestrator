@@ -354,7 +354,7 @@ def call_openrouter(model, messages, max_tokens=1000, temperature=0.7):
     # 指定モデル + フォールバックモデル一覧
     fallback_models = [
         model,
-        "meta-llama/llama-3.3-70b-instruct:free",
+        "qwen/qwen3-next-80b-a3b-instruct:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "openai/gpt-oss-20b:free",
     ]
@@ -401,8 +401,19 @@ def call_openrouter(model, messages, max_tokens=1000, temperature=0.7):
 
 
 
-def call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3):
-    """自動フォールバックなし・単発モデル呼び出し（パッチ生成の多モデル試行用）"""
+def call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3, response_format=None):
+    """自動フォールバックなし・単発モデル呼び出し（パッチ生成の多モデル試行用）
+    response_format="json_object" を指定すると、対応モデルでJSONオブジェクト出力を強制する。
+    自由文(精密化指示など)を期待する呼び出しでは指定しないこと。"""
+    _payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "reasoning": {"exclude": True},
+    }
+    if response_format == "json_object":
+        _payload["response_format"] = {"type": "json_object"}
     r = requests.post(
         OPENROUTER_BASE,
         headers={
@@ -411,13 +422,7 @@ def call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3):
             "HTTP-Referer": "http://localhost:11437",
             "X-Title": "Orchestrator v4"
         },
-        json={
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-            "reasoning": {"exclude": True}
-        },
+        json=_payload,
         timeout=45
     )
     data = r.json()
@@ -1013,25 +1018,34 @@ def _handle_diagnosis_request(system_key, instruction, session_id):
 
     diag_errors = []
     diag_result = None
+    diag_elapsed = None
+    diag_model_used = None
     for model in auto_patch.PATCH_CANDIDATE_MODELS:
+        _dt0 = time.time()
         try:
-            raw = call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3)
+            raw = call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3, response_format="json_object")
         except Exception as e:
-            diag_errors.append(f"[{model}] API呼び出し失敗: {e}")
+            _de = time.time() - _dt0
+            diag_errors.append(f"[{model}] API呼び出し失敗({_de:.1f}秒): {e}")
             continue
         try:
             parsed = auto_patch.extract_json_object(raw)
         except Exception as e:
-            diag_errors.append(f"[{model}] JSON解析失敗: {e}")
+            _de = time.time() - _dt0
+            diag_errors.append(f"[{model}] JSON解析失敗({_de:.1f}秒): {e}")
             continue
         if not parsed.get("filename"):
-            diag_errors.append(f"[{model}] 問題なしと判定: {parsed.get('reason','(理由なし)')}")
+            _de = time.time() - _dt0
+            diag_errors.append(f"[{model}] 問題なしと判定({_de:.1f}秒): {parsed.get('reason','(理由なし)')}")
             continue
         if parsed["filename"] not in auto_patch.ALLOWED_FILES:
-            diag_errors.append(f"[{model}] 提案ファイル'{parsed['filename']}'がホワイトリスト外")
+            _de = time.time() - _dt0
+            diag_errors.append(f"[{model}] 提案ファイル'{parsed['filename']}'がホワイトリスト外({_de:.1f}秒)")
             continue
+        diag_elapsed = time.time() - _dt0
+        diag_model_used = model
         diag_result = parsed
-        log(f"🩻 診断成功: model={model} filename={parsed['filename']} reason={parsed.get('reason','')[:100]}")
+        log(f"🩻 診断成功: model={model} filename={parsed['filename']} elapsed={diag_elapsed:.1f}秒 reason={parsed.get('reason','')[:100]}")
         break
 
     if not diag_result:
@@ -1044,8 +1058,46 @@ def _handle_diagnosis_request(system_key, instruction, session_id):
     combined_instruction = f"{diag_result['filename']} {diag_result['instruction']}"
     result_answer = _handle_patch_request(combined_instruction, session_id)
     if isinstance(result_answer, dict) and "answer" in result_answer:
-        result_answer["answer"] = f"🩻 診断結果: {diag_result.get('reason','')}\n\n" + result_answer["answer"]
+        result_answer["answer"] = f"🩻 診断結果({diag_model_used}, {diag_elapsed:.1f}秒): {diag_result.get('reason','')}\n\n" + result_answer["answer"]
     return result_answer
+
+
+REFINE_INSTRUCTION_SYSTEM_PROMPT = """あなたはコード修正指示を改善するアシスタントです。
+元の修正指示と、それを別のAIに渡した結果失敗した理由が与えられます。
+ファイル内容を踏まえて、次回の試行で成功しやすいよう、より具体的で明確な修正指示を1〜3文の日本語で出力してください。
+説明や前置きは一切不要、指示文のみを出力すること。
+"""
+
+def _refine_patch_instruction(target_filename, original_instruction, last_instruction, error_text):
+    """パッチ生成失敗時、失敗理由を踏まえてより具体的な指示に作り直す（精密化）"""
+    try:
+        with open(auto_patch.ALLOWED_FILES[target_filename], "r", encoding="utf-8") as f:
+            file_content = f.read()
+    except Exception:
+        file_content = ""
+    messages = [
+        {"role": "system", "content": REFINE_INSTRUCTION_SYSTEM_PROMPT},
+        {"role": "user", "content": f"### 対象ファイル(先頭4000文字)\n{file_content[:4000]}\n\n### 元の修正指示\n{original_instruction}\n\n### 直前の指示\n{last_instruction}\n\n### 失敗理由\n{error_text[:2000]}"}
+    ]
+    def _extract_japanese_instruction(raw):
+        """思考過程混入対策: 日本語(ひらがな/カタカナ/漢字)を含む行のみを抽出して結合する。
+        日本語が一切含まれない場合は思考過程のみと判断しNoneを返す(フォールバック用)。"""
+        import re as _re
+        lines = raw.strip().splitlines()
+        jp_lines = [ln.strip() for ln in lines if _re.search(r'[ぁ-んァ-ヶ一-龠]', ln)]
+        if jp_lines:
+            return "".join(jp_lines).strip()
+        return None
+
+    for model in auto_patch.PATCH_CANDIDATE_MODELS[:2]:
+        try:
+            raw = call_openrouter_single(model, messages, max_tokens=800, temperature=0.3)
+            refined = _extract_japanese_instruction(raw)
+            if refined:
+                return refined
+        except Exception:
+            continue
+    return None
 
 
 def _handle_patch_request(instruction, session_id):
@@ -1073,15 +1125,39 @@ def _handle_patch_request(instruction, session_id):
         }
 
     def _llm_call_single(model, messages):
-        return call_openrouter_single(model, messages, max_tokens=4000, temperature=0.3)
+        return call_openrouter_single(model, messages, max_tokens=8000, temperature=0.3, response_format="json_object")
 
-    log(f"🛠 パッチ生成開始: {target_filename} / {instruction[:50]}")
-    result = auto_patch.generate_and_validate_multi(target_filename, instruction, _llm_call_single)
-    if not result["ok"]:
+    MAX_REFINE_RETRIES = 2
+    original_instruction = instruction
+    current_instruction = instruction
+    attempt_log = []
+    result = None
+    _request_t0 = time.time()
+
+    for attempt in range(MAX_REFINE_RETRIES + 1):
+        log(f"🛠 パッチ生成開始(試行{attempt+1}/{MAX_REFINE_RETRIES+1}): {target_filename} / {current_instruction[:50]}")
+        _attempt_t0 = time.time()
+        result = auto_patch.generate_and_validate_multi(target_filename, current_instruction, _llm_call_single)
+        _attempt_elapsed = time.time() - _attempt_t0
+        if result["ok"]:
+            break
         errs = "\n".join(result["errors"])
-        log(f"❌ パッチ生成失敗（全モデル）: {errs[:500]}")
-        return {"answer": f"❌ パッチ生成に失敗しました（{target_filename}）\n全候補モデルで失敗:\n{errs[:1000]}", "model": "system", "source": "error"}
-    log(f"🛠 パッチ生成成功: model={result['model_used']}")
+        attempt_log.append(f"【試行{attempt+1}({_attempt_elapsed:.1f}秒): {current_instruction[:60]}】\n{errs[:500]}")
+        log(f"❌ パッチ生成失敗（全モデル・試行{attempt+1}・{_attempt_elapsed:.1f}秒）: {errs[:500]}")
+        if attempt < MAX_REFINE_RETRIES:
+            refined = _refine_patch_instruction(target_filename, original_instruction, current_instruction, errs)
+            if not refined or refined == current_instruction:
+                log("⚠️ 指示の精密化に失敗、または変化なしのためリトライ中断")
+                break
+            log(f"🔧 指示を精密化: {refined[:80]}")
+            current_instruction = refined
+
+    _total_elapsed = time.time() - _request_t0
+
+    if not result["ok"]:
+        history = "\n\n".join(attempt_log)
+        return {"answer": f"❌ パッチ生成に失敗しました（{target_filename}、合計{_total_elapsed:.1f}秒）\n{MAX_REFINE_RETRIES+1}回試行しましたが全て失敗:\n\n{history[:2000]}", "model": "system", "source": "error"}
+    log(f"🛠 パッチ生成成功: model={result['model_used']} elapsed={result.get('elapsed_seconds', 0):.1f}秒 total={_total_elapsed:.1f}秒")
 
     log(f"🛠 パッチ件数={len(result['patches'])} diff_len={len(result['diff'])}")
     auto_patch.save_pending_patch(
@@ -1090,8 +1166,9 @@ def _handle_patch_request(instruction, session_id):
     )
     reasons = "\n".join(f"- {p.get('reason','(理由なし)')}" for p in result["patches"])
     diff_preview = result["diff"][:3000]
+    _model_elapsed = result.get("elapsed_seconds", 0)
     answer = (
-        f"🛠️ {target_filename} への修正案を生成しました（使用モデル: {result['model_used']}）\n\n"
+        f"🛠️ {target_filename} への修正案を生成しました（使用モデル: {result['model_used']}、{_model_elapsed:.1f}秒 / 合計{_total_elapsed:.1f}秒）\n\n"
         f"【変更理由】\n{reasons}\n\n"
         f"【diff】\n```\n{diff_preview}\n```\n\n"
         f"適用する場合は「承認」、取り消す場合は「キャンセル」と送ってください（10分で自動失効）"
@@ -1173,7 +1250,7 @@ def chat(question, session_id="default"):
     # ── コード修正パッチ承認/却下チェック(プレフィックス判定より先に処理) ──
     _pending = auto_patch.get_pending_patch(CACHE_DB, session_id)
     if _pending:
-        _stripped = question.strip()
+        _stripped = question.lstrip("、,。.").strip()
         if _stripped in ("承認", "はい", "OK", "ok", "Ok", "yes", "YES", "適用", "適用して"):
             return _apply_pending_patch(session_id, _pending)
         elif _stripped in ("キャンセル", "却下", "いいえ", "中止", "no", "NO"):
@@ -1311,8 +1388,8 @@ def chat(question, session_id="default"):
                     log(f"⚠️ Groqレート制限検知 → OpenRouterで再試行")
                     or_fallback_models = [
                         "nvidia/nemotron-3-super-120b-a12b:free",
-                        "openai/gpt-oss-120b:free",
-                        "meta-llama/llama-3.3-70b-instruct:free",
+                        "openai/gpt-oss-20b:free",
+                        "qwen/qwen3-next-80b-a3b-instruct:free",
                     ]
                     answer = None
                     for or_model in or_fallback_models:
@@ -1374,6 +1451,7 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
 .user { background: #0f3460; align-self: flex-end; border-bottom-right-radius: 4px; }
 .ai { background: #1a1a3e; align-self: flex-start; border-bottom-left-radius: 4px; border: 1px solid #333; }
 .model-tag { font-size: 11px; color: #888; margin-top: 6px; }
+.msg-timestamp { font-size: 10px; color: #666; margin-top: 4px; }
 .cache-tag { color: #4caf50; }
 .cloud-tag { color: #2196f3; }
 #input-area { display: flex; gap: 8px; padding: 12px; background: #16213e; border-top: 1px solid #333; align-items: flex-end; }
@@ -1430,6 +1508,13 @@ function addMsg(text, role, model='', source='') {
     else if (source === 'cloud') { icon = '🌐'; tag.classList.add('cloud-tag'); }
     tag.textContent = icon + ' ' + model;
     div.appendChild(tag);
+  }
+  if (!role.includes('thinking')) {
+    const ts = document.createElement('div');
+    ts.className = 'msg-timestamp';
+    const now = new Date();
+    ts.textContent = now.toLocaleTimeString('ja-JP', {hour: '2-digit', minute: '2-digit', second: '2-digit'});
+    div.appendChild(ts);
   }
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
@@ -1535,23 +1620,30 @@ function clearHistory() {
   const fileText = _fileText;
   const fileName = _fileName;
   clearImage();
-  const thinking = addMsg('考え中...', 'ai thinking');
+  const thinking = addMsg('考え中... 0秒', 'ai thinking');
+  const _thinkStart = Date.now();
+  const _thinkTimer = setInterval(() => {
+    const secs = Math.floor((Date.now() - _thinkStart) / 1000);
+    thinking.firstChild ? (thinking.childNodes[0].textContent = `考え中... ${secs}秒`) : (thinking.textContent = `考え中... ${secs}秒`);
+  }, 1000);
   try {
     const res = await fetch('/chat', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json', 'X-Token': 'REMOVED-TOKEN'},
+      headers: {'Content-Type': 'application/json', 'X-Token': '{{ token }}'},
       body: JSON.stringify({message: text, image: imgB64, mime_type: imgMime, file_text: fileText, file_name: fileName, session_id: getSessionId()})
     });
     const data = await res.json();
+    clearInterval(_thinkTimer);
     thinking.remove();
     addMsg(data.answer, 'ai', data.model, data.source);
   } catch(e) {
+    clearInterval(_thinkTimer);
     thinking.textContent = 'エラーが発生しました';
   }
 }
 
 async function clearHistory() {
-  await fetch('/clear', {method: 'POST', headers: {'X-Token': 'REMOVED-TOKEN'}});
+  await fetch('/clear', {method: 'POST', headers: {'X-Token': '{{ token }}'}});
   chat.innerHTML = '';
   addMsg('履歴をクリアしました', 'ai');
 }
@@ -1562,10 +1654,11 @@ async function clearHistory() {
 
 # ── Flask ──────────────────────────────────────
 
-TOKEN = os.environ.get("ORC_TOKEN", "REMOVED-TOKEN")
-WEB_PASSWORD = os.environ.get("ORC_TOKEN")
-if not WEB_PASSWORD:
+ORC_TOKEN_VALUE = os.environ.get("ORC_TOKEN")
+if not ORC_TOKEN_VALUE:
     raise SystemExit("ORC_TOKEN が .env に設定されていません。~/.config/ai-keys/.env に ORC_TOKEN=... を追加してください。")
+TOKEN = ORC_TOKEN_VALUE
+WEB_PASSWORD = ORC_TOKEN_VALUE
 import secrets as _secrets
 SESSION_TOKENS = set()  # 有効なセッショントークン
 
@@ -1632,7 +1725,7 @@ def logout():
 def index():
     if not check_web_auth():
         return redirect('/login')
-    return render_template_string(HTML)
+    return render_template_string(HTML, token=TOKEN)
 
 MAX_FILE_CHARS = 8000
 
