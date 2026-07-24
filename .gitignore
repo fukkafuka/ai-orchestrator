@@ -33,3 +33,4 @@ logs/
 *.corrupt.*
 *.20260[0-9][0-9][0-9][0-9]_*.bak
 *.autopatch_backup_*
+debug_raw/
