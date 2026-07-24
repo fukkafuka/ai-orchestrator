@@ -1,4 +1,4 @@
-import ast, json, re, os, shutil, subprocess, datetime, difflib
+import ast, json, re, os, shutil, subprocess, datetime, difflib, time
 
 ALLOWED_FILES = {
     "orchestrator_v4.py": "/Users/fk/ai-orchestrator/orchestrator_v4.py",
@@ -29,17 +29,17 @@ BACKUP_DIR_MAP = {
 }
 
 PATCH_SYSTEM_PROMPT = """あなたはPythonコードの修正パッチを生成するアシスタントです。
-与えられたファイル内容と修正指示から、修正箇所をJSON配列で返してください。
-出力はJSONのみ。説明文やMarkdownのコードブロック記号は一切含めないこと。
-各要素: {"old_str": "元のコードの一意な一部分", "new_str": "置き換え後のコード", "reason": "変更理由の短い説明"}
+与えられたファイル内容と修正指示から、修正箇所を単一のJSONオブジェクトで返してください。
+出力はJSONオブジェクトのみ。説明文やMarkdownのコードブロック記号は一切含めないこと。
+形式: {"patches": [{"old_str": "元のコードの一意な一部分", "new_str": "置き換え後のコード", "reason": "変更理由の短い説明"}, ...]}
 old_strはファイル内で一意に一箇所だけに一致する、十分な長さの文字列にすること。
-コメントや説明文は一切出力しないこと。JSON配列のみを返すこと。
+コメントや説明文は一切出力しないこと。JSONオブジェクトのみを返すこと。
 
 重要な制約:
 - 思考過程(chain of thought)は一切出力しないこと
 - 「We are」「Let's」「まず」等の前置きや検討過程を書かないこと
-- 出力の最初の1文字は必ず "[" にすること
-- 出力の最後の1文字は必ず "]" にすること
+- 出力の最初の1文字は必ず "{" にすること
+- 出力の最後の1文字は必ず "}" にすること
 """
 
 def build_patch_prompt(file_content: str, instruction: str) -> list:
@@ -114,27 +114,68 @@ def _extract_json_arrays(text):
     return results
 
 
+def _extract_json_objects(text):
+    """文字列中に含まれるトップレベルのJSONオブジェクト候補(文字列を考慮した波括弧対応)をすべて抽出する"""
+    results = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "{":
+            depth = 0
+            in_str = False
+            esc = False
+            j = i
+            while j < n:
+                c = text[j]
+                if in_str:
+                    if esc:
+                        esc = False
+                    elif c == "\\":
+                        esc = True
+                    elif c == '"':
+                        in_str = False
+                else:
+                    if c == '"':
+                        in_str = True
+                    elif c == "{":
+                        depth += 1
+                    elif c == "}":
+                        depth -= 1
+                        if depth == 0:
+                            results.append(text[i:j+1])
+                            break
+                j += 1
+            i = j + 1
+        else:
+            i += 1
+    return results
+
+
 def parse_patch_response(raw: str):
     raw = raw.strip()
     raw = re.sub(r"^```(json)?", "", raw).strip()
     raw = re.sub(r"```$", "", raw).strip()
 
-    candidates = _extract_json_arrays(raw)
-    if not candidates and raw.startswith("["):
+    candidates = _extract_json_objects(raw)
+    if not candidates and raw.startswith("{"):
         candidates = [raw]
     if not candidates:
-        raise ValueError(f"応答にJSON配列が見つかりません（推論テキストのみの可能性）: {raw[:200]!r}")
+        raise ValueError(f"応答にJSONオブジェクトが見つかりません（推論テキストのみの可能性）: {raw[:200]!r}")
 
     last_error = None
     # 後方(=最終的な回答である可能性が高い)から順に、スキーマに合致する候補を採用
     for candidate in reversed(candidates):
         try:
-            patches = json.loads(candidate)
+            obj = json.loads(candidate)
         except json.JSONDecodeError as e:
             last_error = e
             continue
+        if not isinstance(obj, dict) or "patches" not in obj:
+            last_error = ValueError("'patches'キーを持つオブジェクトではありません")
+            continue
+        patches = obj["patches"]
         if not isinstance(patches, list) or len(patches) == 0:
-            last_error = ValueError("配列が空、またはリストではありません")
+            last_error = ValueError("patchesが空、またはリストではありません")
             continue
         if all(isinstance(p, dict) and "old_str" in p and "new_str" in p for p in patches):
             return patches
@@ -295,9 +336,8 @@ def delete_pending_patch(db_path, session_id):
 # ── 複数モデル試行（1モデルずつ検証しながらフォールバック） ──────────────
 
 PATCH_CANDIDATE_MODELS = [
-    "qwen/qwen3-coder:free",
-    "meta-llama/llama-3.3-70b-instruct:free",
     "nvidia/nemotron-3-super-120b-a12b:free",
+    "nvidia/nemotron-3-nano-30b-a3b:free",
     "openai/gpt-oss-20b:free",
 ]
 
@@ -317,42 +357,66 @@ def generate_and_validate_multi(filename: str, instruction: str, llm_call_single
     models = models or PATCH_CANDIDATE_MODELS
 
     attempt_errors = []
+    timings = []
     for model in models:
+        _t0 = time.time()
         try:
             raw = llm_call_single(model, messages)
         except Exception as e:
-            attempt_errors.append(f"[{model}] API呼び出し失敗: {e}")
+            _elapsed = time.time() - _t0
+            timings.append((model, _elapsed, "api_error"))
+            attempt_errors.append(f"[{model}] API呼び出し失敗({_elapsed:.1f}秒): {e}")
             continue
 
         try:
             patches = parse_patch_response(raw)
         except Exception as e:
-            attempt_errors.append(f"[{model}] JSON解析失敗: {e} (raw_len={len(raw)})")
+            _elapsed = time.time() - _t0
+            timings.append((model, _elapsed, "json_error"))
+            debug_dir = os.path.expanduser("~/ai-orchestrator/debug_raw")
+            os.makedirs(debug_dir, exist_ok=True)
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            safe_model = model.replace("/", "_").replace(":", "_")
+            debug_path = os.path.join(debug_dir, f"{safe_model}_{ts}.txt")
+            try:
+                with open(debug_path, "w", encoding="utf-8") as _df:
+                    _df.write(raw)
+            except Exception:
+                debug_path = "(保存失敗)"
+            attempt_errors.append(f"[{model}] JSON解析失敗({_elapsed:.1f}秒): {e} (raw_len={len(raw)}, saved={debug_path})")
             continue
 
         uniq_errors = validate_uniqueness(old_content, patches)
         if uniq_errors:
-            attempt_errors.append(f"[{model}] 一意性検証失敗: {'; '.join(uniq_errors)}")
+            _elapsed = time.time() - _t0
+            timings.append((model, _elapsed, "uniq_error"))
+            attempt_errors.append(f"[{model}] 一意性検証失敗({_elapsed:.1f}秒): {'; '.join(uniq_errors)}")
             continue
 
         new_content = apply_patches(old_content, patches)
         ok, syn_err = validate_syntax(new_content)
         if not ok:
-            attempt_errors.append(f"[{model}] 構文チェック失敗: {syn_err}")
+            _elapsed = time.time() - _t0
+            timings.append((model, _elapsed, "syntax_error"))
+            attempt_errors.append(f"[{model}] 構文チェック失敗({_elapsed:.1f}秒): {syn_err}")
             continue
 
+        _elapsed = time.time() - _t0
+        timings.append((model, _elapsed, "success"))
         diff = make_diff(old_content, new_content, filename)
         return {
             "ok": True,
             "model_used": model,
+            "elapsed_seconds": _elapsed,
             "patches": patches,
             "old_content": old_content,
             "new_content": new_content,
             "diff": diff,
             "attempt_errors": attempt_errors,
+            "timings": timings,
         }
 
-    return {"ok": False, "errors": attempt_errors}
+    return {"ok": False, "errors": attempt_errors, "timings": timings}
 
 
 # ── git連携 ──────────────────────────────────────

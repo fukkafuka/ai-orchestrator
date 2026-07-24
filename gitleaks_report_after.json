@@ -1,0 +1,23 @@
+[
+ {
+  "RuleID": "curl-auth-header",
+  "Description": "Discovered a potential authorization token provided in a curl command header, which could compromise the curl accessed resource.",
+  "StartLine": 3,
+  "EndLine": 5,
+  "StartColumn": 2,
+  "EndColumn": 28,
+  "Match": "curl -s http://127.0.0.1:11437/chat \\\n  -H \"Content-Type: application/json\" \\\n  -H \"X-Token: REMOVED-TOKEN\"",
+  "Secret": "REMOVED-TOKEN",
+  "File": "_orc.sh",
+  "SymlinkFile": "",
+  "Commit": "4f1189d54647c06627a405da31f62d6b599394a6",
+  "Link": "https://github.com/fukkafuka/ai-orchestrator/blob/4f1189d54647c06627a405da31f62d6b599394a6/_orc.sh#L3-L5",
+  "Entropy": 3.0957952,
+  "Author": "fukkafuka",
+  "Email": "kakakafufufu@gmail.com",
+  "Date": "2026-07-15T05:43:44Z",
+  "Message": "Initial commit（WEB_PASSWORDハードコード除去・.gitignore整備・tools/prompts追加）",
+  "Tags": [],
+  "Fingerprint": "4f1189d54647c06627a405da31f62d6b599394a6:_orc.sh:curl-auth-header:3"
+ }
+]
