@@ -1674,7 +1674,7 @@ function clearHistory() {
 }
 
 async function clearHistory() {
-  await fetch('/clear', {
+  await fetch('/session/clear', {
     method: 'POST',
     headers: {'X-Token': '{{ token }}', 'Content-Type': 'application/json'},
     body: JSON.stringify({session_id: getSessionId()})
