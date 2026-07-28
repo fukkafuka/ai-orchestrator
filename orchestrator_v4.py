@@ -256,6 +256,13 @@ def init_cache():
             created_at TEXT DEFAULT (datetime('now'))
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS session_names (
+            session_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -1498,9 +1505,17 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
   🐈 オーケストレーター
   <div style="display:flex;gap:8px;align-items:center;">
     <a href="/help" style="background:#1a3a5c;color:#4caf50;padding:4px 10px;border-radius:8px;font-size:12px;text-decoration:none;" target="_blank">❓ ヘルプ</a>
+    <button onclick="toggleSessionPanel()" style="background:#1a3a5c;color:#4caf50;border:none;padding:4px 10px;border-radius:8px;font-size:12px;cursor:pointer;">📋 セッション</button>
     <button onclick="clearHistory()" style="background:#3a1a1a;color:#e94560;border:none;padding:4px 10px;border-radius:8px;font-size:12px;cursor:pointer;">🗑️ 履歴クリア</button>
   </div>
 </header>
+<div id="session-panel" style="display:none;background:#16213e;border-bottom:1px solid #333;padding:10px 16px;max-height:260px;overflow-y:auto;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+    <strong style="font-size:13px;color:#4caf50;">セッション一覧</strong>
+    <button onclick="startNewSession()" style="background:#1a3a5c;color:#4caf50;border:none;padding:3px 8px;border-radius:6px;font-size:11px;cursor:pointer;">＋ 新規セッション</button>
+  </div>
+  <div id="session-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+</div>
 <div class="hint">💡 <strong>。</strong>クラウド ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/captcha/stats" style="color:#4caf50" target="_blank">🧩 CAPTCHA</a> ｜ <a href="/dreaming/stats" style="color:#9c27b0" target="_blank">🌙 Dreaming</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ MythoFable</a></div>
 <div id="chat"></div>
 <div id="input-area">
@@ -1636,7 +1651,18 @@ function clearHistory() {
       sp.innerHTML = '🔑 <code style="background:#0f3460;padding:1px 6px;border-radius:3px;color:#9c27b0;letter-spacing:1px;" title="引継:'+getSessionCode()+'と入力で引き継ぎ">'+getSessionCode()+'</code>';
       hint.appendChild(sp);
     }
+    restoreHistory();
   });
+
+  async function restoreHistory() {
+    try {
+      const res = await fetch('/history?session_id=' + encodeURIComponent(getSessionId()), {headers: {'X-Token': '{{ token }}'}});
+      const hist = await res.json();
+      for (const m of hist) {
+        addMsg(m.content, m.role === 'user' ? 'user' : 'ai');
+      }
+    } catch (e) { /* 履歴復元に失敗しても致命的ではないため無視 */ }
+  }
 
   async function sendMsg() {
   const text = input.value.trim();
@@ -1683,8 +1709,71 @@ async function clearHistory() {
   chat.innerHTML = '';
   addMsg('履歴をクリアしました', 'ai');
 }
+
+let _sessionPanelOpen = false;
+async function toggleSessionPanel() {
+  const panel = document.getElementById('session-panel');
+  _sessionPanelOpen = !_sessionPanelOpen;
+  panel.style.display = _sessionPanelOpen ? 'block' : 'none';
+  if (_sessionPanelOpen) await loadSessionList();
+}
+
+async function loadSessionList() {
+  const listEl = document.getElementById('session-list');
+  listEl.innerHTML = '<div style="color:#888;font-size:12px;">読み込み中...</div>';
+  try {
+    const res = await fetch('/sessions', {headers: {'X-Token': '{{ token }}'}});
+    const sessions = await res.json();
+    const currentId = getSessionId();
+    if (!sessions.length) {
+      listEl.innerHTML = '<div style="color:#888;font-size:12px;">まだセッションがありません</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    for (const s of sessions) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;background:' + (s.session_id === currentId ? '#1a3a5c' : '#0f0f23') + ';border-radius:8px;padding:6px 8px;';
+      const label = document.createElement('div');
+      label.style.cssText = 'flex:1;cursor:pointer;font-size:13px;color:#eee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      label.textContent = (s.session_id === currentId ? '● ' : '') + s.name + '  (' + s.message_count + '件)';
+      label.onclick = () => switchSession(s.session_id);
+      const renameBtn = document.createElement('button');
+      renameBtn.textContent = '✎';
+      renameBtn.title = '名前を変更';
+      renameBtn.style.cssText = 'background:none;border:none;color:#4caf50;cursor:pointer;font-size:13px;flex-shrink:0;';
+      renameBtn.onclick = (e) => { e.stopPropagation(); renameSessionPrompt(s.session_id, s.name); };
+      row.appendChild(label);
+      row.appendChild(renameBtn);
+      listEl.appendChild(row);
+    }
+  } catch (e) {
+    listEl.innerHTML = '<div style="color:#e94560;font-size:12px;">読み込みに失敗しました</div>';
+  }
+}
+
+function switchSession(sessionId) {
+  sessionStorage.setItem('orc_sid', sessionId);
+  location.reload();
+}
+
+function startNewSession() {
+  sessionStorage.removeItem('orc_sid');
+  location.reload();
+}
+
+async function renameSessionPrompt(sessionId, currentName) {
+  const name = prompt('セッション名を入力してください', currentName);
+  if (!name || !name.trim()) return;
+  await fetch('/sessions/rename', {
+    method: 'POST',
+    headers: {'X-Token': '{{ token }}', 'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: sessionId, name: name.trim()})
+  });
+  await loadSessionList();
+}
 </script>
 </body>
+
 </html>"""
 
 
@@ -2425,6 +2514,59 @@ a {{ color: #4caf50; text-decoration: none; display: inline-block; margin-top: 2
 </html>"""
     return html
 
+@app.route('/sessions', methods=['GET'])
+def list_sessions():
+    if not check_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    conn = sqlite3.connect(CACHE_DB)
+    rows = conn.execute("""
+        SELECT session_id, MAX(created_at) AS last_at, COUNT(*) AS cnt
+        FROM conversations
+        WHERE session_id != 'legacy'
+        GROUP BY session_id
+        ORDER BY last_at DESC
+        LIMIT 50
+    """).fetchall()
+    names = dict(conn.execute("SELECT session_id, name FROM session_names").fetchall())
+    result = []
+    for session_id, last_at, cnt in rows:
+        if session_id in names:
+            name = names[session_id]
+        else:
+            first_user = conn.execute(
+                "SELECT content FROM conversations WHERE session_id=? AND role='user' ORDER BY id ASC LIMIT 1",
+                (session_id,)
+            ).fetchone()
+            name = (first_user[0][:20] + "…") if first_user and len(first_user[0]) > 20 else (first_user[0] if first_user else session_id[-8:])
+        result.append({
+            "session_id": session_id,
+            "name": name,
+            "custom_name": session_id in names,
+            "last_at": last_at,
+            "message_count": cnt,
+        })
+    conn.close()
+    return jsonify(result)
+
+@app.route('/sessions/rename', methods=['POST'])
+def rename_session():
+    if not check_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id', '').strip()
+    name = data.get('name', '').strip()[:50]
+    if not session_id or not name:
+        return jsonify({"error": "session_idとnameは必須です"}), 400
+    conn = sqlite3.connect(CACHE_DB)
+    conn.execute(
+        "INSERT INTO session_names (session_id, name, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(session_id) DO UPDATE SET name=excluded.name, updated_at=CURRENT_TIMESTAMP",
+        (session_id, name)
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({"status": "renamed", "session_id": session_id, "name": name})
+
 @app.route('/session/clear', methods=['POST'])
 def session_clear():
     if not check_auth():
@@ -2438,6 +2580,7 @@ def session_clear():
     try:
         conn = sqlite3.connect(CACHE_DB)
         conn.execute('DELETE FROM conversations WHERE session_id=?', (session_id,))
+        conn.execute('DELETE FROM session_names WHERE session_id=?', (session_id,))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -2457,8 +2600,10 @@ def cache_clear():
 
 @app.route('/history', methods=['GET'])
 def history():
+    if not check_auth():
+        return jsonify({"error": "Unauthorized"}), 401
     session_id = request.args.get('session_id', 'default')
-    return jsonify(conversation_histories.get(session_id, []))
+    return jsonify(load_conversation_history(MAX_HISTORY, session_id))
 
 @app.route('/clear', methods=['POST'])
 def clear():
