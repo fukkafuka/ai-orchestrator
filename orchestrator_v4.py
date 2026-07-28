@@ -1146,7 +1146,7 @@ def _handle_patch_request(instruction, session_id):
     def _llm_call_single(model, messages):
         return call_openrouter_single(model, messages, max_tokens=8000, temperature=0.3, response_format="json_object")
 
-    MAX_REFINE_RETRIES = 2
+    MAX_REFINE_RETRIES = 1  # 2026-07-28: 無料枠モデルの1試行が長時間化(45秒timeout指定でも実測60〜130秒超)することが判明したため、3ラウンド→2ラウンドに短縮して最悪ケースの待ち時間を抑制
     original_instruction = instruction
     current_instruction = instruction
     attempt_log = []
