@@ -1674,7 +1674,11 @@ function clearHistory() {
 }
 
 async function clearHistory() {
-  await fetch('/clear', {method: 'POST', headers: {'X-Token': '{{ token }}'}});
+  await fetch('/clear', {
+    method: 'POST',
+    headers: {'X-Token': '{{ token }}', 'Content-Type': 'application/json'},
+    body: JSON.stringify({session_id: getSessionId()})
+  });
   chat.innerHTML = '';
   addMsg('履歴をクリアしました', 'ai');
 }
@@ -2460,8 +2464,17 @@ def clear():
     if not check_auth():
         return jsonify({"error": "Unauthorized"}), 401
     global conversation_history
+    data = request.get_json(silent=True) or {}
+    session_id = data.get('session_id', 'default')
     conversation_history = []
-    return jsonify({"status": "cleared"})
+    try:
+        conn = sqlite3.connect(CACHE_DB)
+        conn.execute("DELETE FROM conversations WHERE session_id=?", (session_id,))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    return jsonify({"status": "cleared", "session_id": session_id})
 
 if __name__ == "__main__":
     init_cache()
