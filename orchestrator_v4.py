@@ -1314,7 +1314,19 @@ def chat(question, session_id="default"):
             log(f"💬 会話履歴をDBから復元: {len(conversation_history)}件")
 
     # 過去の会話から関連する内容を検索
-    words = [w for w in clean_question.split() if len(w) > 2][:3]
+    # 2026-07-28: 「こんにちは」等の挨拶語は極めて多くの過去会話にヒットしてしまい、
+    # 無関係な過去の会話内容を誤って注入するバグの原因になっていたため、除外する
+    _GREETING_STOPWORDS = {
+        "こんにちは", "こんにちわ", "おはよう", "おはようございます",
+        "こんばんは", "こんばんわ", "ありがとう", "ありがとうございます",
+        "よろしく", "よろしくお願いします", "お疲れ様", "お疲れ様です",
+    }
+    def _strip_punct(w):
+        return w.strip("。、！？!?.,")
+    words = [
+        w for w in clean_question.split()
+        if len(w) > 2 and _strip_punct(w) not in _GREETING_STOPWORDS
+    ][:3]
     past_context = ""
     for word in words:
         past = search_past_conversations(word, limit=2)
