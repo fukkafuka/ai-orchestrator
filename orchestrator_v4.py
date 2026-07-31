@@ -34,7 +34,7 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_BASE = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"  # 2026-08-01: llama-3.3-70b-versatileはGroqが2026-08-16に廃止予定のため移行(公式推奨の移行先)
 
 # モデル設定
 MODEL_CLOUD   = "meta-llama/llama-3.3-70b-instruct:free"  # クラウド（;プレフィックス）
