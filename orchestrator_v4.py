@@ -20,6 +20,7 @@ from flask import Flask, request, jsonify, render_template_string, redirect
 
 import dotenv
 import auto_patch
+from model_status import filter_alive_models
 try:
     from ddgs import DDGS
     DDG_AVAILABLE = True
@@ -34,7 +35,7 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 OPENROUTER_BASE = "https://openrouter.ai/api/v1/chat/completions"
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-120b"  # 2026-08-01: llama-3.3-70b-versatileはGroqが2026-08-16に廃止予定のため移行(公式推奨の移行先)
 
 # モデル設定
 MODEL_CLOUD   = "meta-llama/llama-3.3-70b-instruct:free"  # クラウド（;プレフィックス）
@@ -359,12 +360,11 @@ def ask_cloud_with_search(question, messages):
 
 def call_openrouter(model, messages, max_tokens=1000, temperature=0.7):
     # 指定モデル + フォールバックモデル一覧
-    fallback_models = [
-        model,
+    fallback_models = [model] + filter_alive_models([
         "qwen/qwen3-next-80b-a3b-instruct:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
         "openai/gpt-oss-20b:free",
-    ]
+    ], provider="openrouter")
     # 重複除去（順序保持）
     seen = set()
     models_to_try = [m for m in fallback_models if not (m in seen or seen.add(m))]
@@ -1425,11 +1425,11 @@ def chat(question, session_id="default"):
                 # Groqレート制限時はOpenRouterで再フォールバック
                 if "Rate limit" in str(e2) or "rate_limit" in str(e2).lower() or "TPD" in str(e2) or "tokens per day" in str(e2).lower():
                     log(f"⚠️ Groqレート制限検知 → OpenRouterで再試行")
-                    or_fallback_models = [
+                    or_fallback_models = filter_alive_models([
                         "nvidia/nemotron-3-super-120b-a12b:free",
                         "openai/gpt-oss-20b:free",
                         "qwen/qwen3-next-80b-a3b-instruct:free",
-                    ]
+                    ], provider="openrouter")
                     answer = None
                     for or_model in or_fallback_models:
                         try:

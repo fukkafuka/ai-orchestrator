@@ -1,4 +1,5 @@
 import ast, json, re, os, shutil, subprocess, datetime, difflib, time
+from model_status import filter_alive_models
 
 ALLOWED_FILES = {
     "orchestrator_v4.py": "/Users/fk/ai-orchestrator/orchestrator_v4.py",
@@ -335,11 +336,11 @@ def delete_pending_patch(db_path, session_id):
 
 # ── 複数モデル試行（1モデルずつ検証しながらフォールバック） ──────────────
 
-PATCH_CANDIDATE_MODELS = [
+PATCH_CANDIDATE_MODELS = filter_alive_models([
     "nvidia/nemotron-3-nano-30b-a3b:free",
     "openai/gpt-oss-20b:free",
     "nvidia/nemotron-3-super-120b-a12b:free",
-]
+], provider="openrouter")
 
 def generate_and_validate_multi(filename: str, instruction: str, llm_call_single, models=None, max_tokens=4000):
     """
