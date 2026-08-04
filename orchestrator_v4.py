@@ -2136,9 +2136,11 @@ a { color: #9c27b0; text-decoration: none; display: inline-block; margin-top: 20
 </html>"""
     return html
 
-def _render_combined_trend(dates, fails, totals, fail_patterns, fixed, fix_patterns, pat_colors):
+def _render_combined_trend(dates, fails, totals, fail_patterns, fixed, fix_patterns, pat_colors, errors=None):
     if not dates:
         return '<p style="color:#666;font-size:13px;background:#16213e;border-radius:12px;padding:16px;">データなし</p>'
+    if errors is None:
+        errors = [0] * len(dates)
     import re as _re
     from collections import Counter as _C
     UNKNOWN_COLOR = "#9e9e9e"
@@ -2156,7 +2158,7 @@ def _render_combined_trend(dates, fails, totals, fail_patterns, fixed, fix_patte
     max_fail = max(fails) if fails else 1
     max_fix = max(fixed) if fixed else 1
     cols = ""
-    for d, f, t, fpats, v, xpats in zip(dates, fails, totals, fail_patterns, fixed, fix_patterns):
+    for d, f, t, fpats, v, xpats, err_cnt in zip(dates, fails, totals, fail_patterns, fixed, fix_patterns, errors):
         # 失敗バー
         fail_count = _C(fpats)
         fail_h = int((f / (max_fail + 1)) * 80) + (4 if f > 0 else 0)
@@ -2180,7 +2182,11 @@ def _render_combined_trend(dates, fails, totals, fail_patterns, fixed, fix_patte
         if fix_lines:
             fix_tip += f"\n{fix_lines}"
         fix_stack = ""
-        if v == 0:
+        if v == 0 and err_cnt > 0:
+            # 2026-08-04: 修正0件が「本当に不要だった」のか「doctorがエラーで記録できなかった」のかを区別する
+            fix_stack = '<div style="height:16px;background:repeating-linear-gradient(45deg,#e65100,#e65100 4px,#ffb74d 4px,#ffb74d 8px);border-radius:4px 4px 0 0;"></div>'
+            fix_tip = f"📅 {d}  ⚠️ doctorでエラーが{err_cnt}件発生（自動対応の記録なし・修正0件とは別扱い）"
+        elif v == 0:
             fix_stack = '<div style="height:4px;background:#333;border-radius:4px 4px 0 0;"></div>'
         elif not xpats:
             fix_stack = f'<div style="height:{fix_h}px;background:#9e9e9e;border-radius:4px 4px 0 0;"></div>'
@@ -2200,7 +2206,7 @@ def _render_combined_trend(dates, fails, totals, fail_patterns, fixed, fix_patte
             f'<div class="captcha-col-label">{d}</div>'
             f'</div>'
         )
-    return f'<div class="card"><div class="captcha-bar-legend">📅 左=失敗 ｜ 🤖 右=自動対応試行（doctor、実効性未検証）</div><div class="captcha-bar">{cols}</div></div>'
+    return f'<div class="card"><div class="captcha-bar-legend">📅 左=失敗 ｜ 🤖 右=自動対応試行（doctor、実効性未検証） ｜ <span style="color:#ffb74d;">斜線=doctorエラーで記録なし</span></div><div class="captcha-bar">{cols}</div></div>'
 
 def _render_fix_trend(dates, fixed, patterns=None, pat_colors=None):
     if not dates or all(v == 0 for v in fixed):
@@ -2418,6 +2424,15 @@ def captcha_stats():
     chart_fixed = [daily_fix[d]["count"] if d in daily_fix else 0 for d in chart_dates]
     chart_fixed_patterns = [daily_fix[d]["patterns"] if d in daily_fix else [] for d in chart_dates]
 
+    # doctor_errors を同じ日付軸で日別集計（クラッシュ等で記録できなかった日を区別するため）
+    doctor_errors = m.get("doctor_errors", [])
+    daily_errors = _dd(int)
+    for entry in doctor_errors:
+        date = _extract_mmdd(entry.get("time", ""))
+        if date:
+            daily_errors[date] += 1
+    chart_errors = [daily_errors.get(d, 0) for d in chart_dates]
+
     # 手動修正済み履歴（manual_fix_history）を同じ日付軸で日別集計
     manual_fix_history = m.get("manual_fix_history", [])
     daily_manual = _dd(lambda: {"count": 0, "patterns": []})
@@ -2502,7 +2517,7 @@ a {{ color: #4caf50; text-decoration: none; display: inline-block; margin-top: 2
 <div class="bar-bg"><div class="bar-fill"></div></div>
 <h2>件数トレンド（日別・直近10日）</h2>
 {_captcha_tooltip_script()}
-{_render_combined_trend(chart_dates, chart_fails, chart_totals, chart_patterns, chart_fixed, chart_fixed_patterns, pat_colors)}
+{_render_combined_trend(chart_dates, chart_fails, chart_totals, chart_patterns, chart_fixed, chart_fixed_patterns, pat_colors, chart_errors)}
 <h2>🕒 手動修正待ち（{manual_pending_count}件）</h2>
 {manual_pending_html}
 <h2>✅ 手動修正済みトレンド（日別・直近10日）</h2>
