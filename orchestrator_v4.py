@@ -644,7 +644,7 @@ Pythonコード修正は、ユーザーが明示的に依頼した場合のみ�
             ],
             capture_output=True,
             text=True,
-            timeout=None,
+            timeout=60,
             stdin=subprocess.DEVNULL
         )
         print(f"### llama.cpp 終了 {time.time()-t0:.1f} 秒")
@@ -2647,4 +2647,4 @@ if __name__ == "__main__":
     cert = os.path.expanduser('~/MythoFable/hz-k-2mba14.tailb82610.ts.net.crt')
     key  = os.path.expanduser('~/MythoFable/hz-k-2mba14.tailb82610.ts.net.key')
     ssl_ctx = (cert, key) if os.path.exists(cert) and os.path.exists(key) else None
-    app.run(host='0.0.0.0', port=11437, debug=False, ssl_context=ssl_ctx)
+    app.run(host='0.0.0.0', port=11437, debug=False, ssl_context=ssl_ctx, threaded=True)
