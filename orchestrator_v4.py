@@ -2073,8 +2073,8 @@ def dreaming_stats():
     karma_history = m.get("karma_history", [])
     karma_up_triggers = m.get("karma_up_triggers", [])
     commented_topics = m.get("commented_topics", [])[-10:]
-    karma_labels = [k["time"][-5:] for k in karma_history[-10:]]
-    karma_values = [k["karma"] for k in karma_history[-10:]]
+    karma_labels = [k["time"][-5:] for k in karma_history[-24:]]
+    karma_values = [k["karma"] for k in karma_history[-24:]]
 
     avoid_html = "".join('<span class="tag">' + t + '</span>' for t in avoid_topics) if avoid_topics else "<p>なし</p>"
     
@@ -2119,7 +2119,7 @@ a { color: #9c27b0; text-decoration: none; display: inline-block; margin-top: 20
 <body>
 <h1>🌙 Dreaming ダッシュボード</h1>
 """ + '<div class="last-dream">最終dreaming: ' + last_dream + '</div>' + """
-<h2>⬆️ Karmaトレンド（直近10件）</h2>
+<h2>⬆️ Karmaトレンド（直近24件）</h2>
 <div class="card"><div class="karma-bar">""" + karma_bar_html + """</div></div>
 <h2>🎯 Karma上昇トリガー（直近5件）</h2>
 """ + trigger_html + """
