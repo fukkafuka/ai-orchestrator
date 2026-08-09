@@ -2081,10 +2081,15 @@ def dreaming_stats():
     if karma_values and len(karma_values) > 1:
         min_k = min(karma_values)
         max_k = max(karma_values)
+        _c_low = (106, 27, 154)   # 低い値: 落ち着いた紫
+        _c_high = (255, 64, 129)  # 高い値: 鮮やかなピンク
         karma_bar_html = ""
         for k, l in zip(karma_values, karma_labels):
-            h = int((k - min_k) / (max_k - min_k + 1) * 70) + 10
-            karma_bar_html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px" data-label="karma: ' + str(k) + '"></div><div class="karma-label">' + l + '</div></div>'
+            ratio = (k - min_k) / (max_k - min_k + 1)
+            h = int(ratio * 70) + 10
+            _rgb = tuple(int(_c_low[i] + (_c_high[i] - _c_low[i]) * ratio) for i in range(3))
+            bar_color = 'rgb(' + str(_rgb[0]) + ',' + str(_rgb[1]) + ',' + str(_rgb[2]) + ')'
+            karma_bar_html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-label="karma: ' + str(k) + '"></div><div class="karma-label">' + l + '</div></div>'
     else:
         karma_bar_html = "データなし"
 
@@ -2109,7 +2114,7 @@ h2 { font-size: 16px; margin: 20px 0 10px; color: #aaa; }
 .karma-col { flex: none; width: 100%; background: #9c27b0; border-radius: 4px 4px 0 0; min-height: 4px; position: relative; cursor: default; }
 .karma-col::after { content: attr(data-label); position: absolute; bottom: 105%; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; display: none; z-index: 10; }
 .karma-col:hover::after { display: block; }
-.karma-label { font-size: 9px; color: #888; text-align: center; margin-top: 4px; }
+.karma-label { font-size: 11px; color: #ccc; text-align: center; margin-top: 4px; font-weight: 500; }
 .topic { background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 13px; color: #ccc; }
 .trigger { background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 12px; color: #4caf50; }
 a { color: #9c27b0; text-decoration: none; display: inline-block; margin-top: 20px; }
