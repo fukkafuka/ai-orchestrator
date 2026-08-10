@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
+import sys
 import os
 """
 オーケストレーター v4
@@ -169,7 +170,17 @@ def get_agent_context(question, max_comments=3):
     except Exception as e:
         return ""
 
+_SANITIZER_PATH = os.path.expanduser("~/.config/ai-keys")
+if _SANITIZER_PATH not in sys.path:
+    sys.path.insert(0, _SANITIZER_PATH)
+try:
+    from secret_sanitizer import sanitize_secrets as _sanitize_secrets
+except Exception:
+    def _sanitize_secrets(text):
+        return text
+
 def log(msg):
+    msg = _sanitize_secrets(str(msg))
     ts = datetime.now().strftime('%H:%M:%S')
     line = f"🐈[{ts}] {msg}"
     print(line)
