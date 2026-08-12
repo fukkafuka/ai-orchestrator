@@ -1281,6 +1281,119 @@ def _apply_pending_patch(session_id, pending):
     }
 
 
+def ask_orchestrated_agents(question, agent_context=""):
+    """階層型マルチエージェント（。。。プレフィックス）
+    Agent B・C: 同じ質問を異なるOpenRouterモデルに投げる（役割指定なし・多様性重視）
+    Agent A : B・Cの回答を統合し、最終回答を1本にまとめてユーザーへ返す（B・Cの生回答はログのみ）"""
+    import concurrent.futures
+
+    if DDG_AVAILABLE:
+        search_result = search_web(question)
+        log(f"🤝 Orchestrated Web検索結果取得: {len(search_result)}文字")
+        search_context = f"\n\nWeb search results (use if relevant to the question):\n{search_result}"
+    else:
+        search_context = ""
+
+    sub_agents = [
+        {"name": "Agent B", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
+        {"name": "Agent C", "model": "nousresearch/hermes-3-llama-3.1-405b:free"},
+    ]
+    neutral_role = f"あなたは優秀なAIアシスタントです。常に日本語で、簡潔かつ正確に回答してください。思考過程は不要です。{search_context}"
+
+    def query_sub_agent(agent):
+        models_to_try = [agent["model"]] + filter_alive_models([
+            "qwen/qwen3-next-80b-a3b-instruct:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "openai/gpt-oss-20b:free",
+        ], provider="openrouter")
+        for model in models_to_try:
+            try:
+                r = requests.post(
+                    OPENROUTER_BASE,
+                    headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+                    json={
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": neutral_role},
+                            {"role": "user", "content": question}
+                        ],
+                        "max_tokens": 600,
+                        "temperature": 0.7
+                    },
+                    timeout=30
+                )
+                data = r.json()
+                if "choices" in data:
+                    log(f"🤝 {agent['name']}（{model}）成功")
+                    return agent["name"], data["choices"][0]["message"]["content"]
+                log(f"🤝 {agent['name']} {model} エラー: {data.get('error',{}).get('message','不明')[:50]}")
+            except Exception as e:
+                log(f"🤝 {agent['name']} {model} 接続エラー: {str(e)[:50]}")
+                continue
+        # Groqフォールバック
+        try:
+            log(f"🤝 {agent['name']} Groqフォールバック試行")
+            r = requests.post(
+                GROQ_BASE,
+                headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "system", "content": neutral_role}, {"role": "user", "content": question}], "max_tokens": 600},
+                timeout=30
+            )
+            data = r.json()
+            if "choices" in data:
+                log(f"🤝 {agent['name']} Groq成功")
+                return agent["name"], data["choices"][0]["message"]["content"]
+            log(f"🤝 {agent['name']} Groq応答エラー: {data.get('error',{}).get('message','不明')[:80]}")
+        except Exception as e:
+            log(f"🤝 {agent['name']} Groqエラー: {str(e)[:80]}")
+        return agent["name"], None
+
+    results = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        futures = {executor.submit(query_sub_agent, agent): agent for agent in sub_agents}
+        for future in concurrent.futures.as_completed(futures):
+            name, answer = future.result()
+            results[name] = answer
+
+    b_answer = results.get("Agent B")
+    c_answer = results.get("Agent C")
+    log(f"🤝 Agent B: {'成功' if b_answer else '失敗'} / Agent C: {'成功' if c_answer else '失敗'}")
+
+    if not b_answer and not c_answer:
+        return "サブエージェント（Agent B・C）が両方とも応答不可でした。時間をおいて再試行してください。"
+
+    sub_answers_text = ""
+    if b_answer:
+        sub_answers_text += f"\n[Agent Bの回答]\n{b_answer}\n"
+    if c_answer:
+        sub_answers_text += f"\n[Agent Cの回答]\n{c_answer}\n"
+
+    synth_system = (
+        "あなたはAgent Aとして、他の2体のAIエージェント（B・C）の回答を統合し、"
+        "最終的な回答を1本にまとめる役割です。重複は除き、内容に食い違いがあれば指摘した上で、"
+        "常に日本語で簡潔かつ正確にまとめてください。B・Cという名称や存在には言及せず、"
+        "あなた自身の回答として自然に提示してください。"
+        + (f"\n{agent_context}" if agent_context else "")
+    )
+    synth_user = f"元の質問:\n{question}\n{sub_answers_text}\n上記を踏まえて最終回答をまとめてください。"
+
+    try:
+        final_answer = call_openrouter(
+            MODEL_CLOUD,
+            [
+                {"role": "system", "content": synth_system},
+                {"role": "user", "content": synth_user}
+            ],
+            max_tokens=1200,
+            temperature=0.5
+        )
+        log("🤝 Agent A 統合完了")
+        return final_answer
+    except Exception as e:
+        log(f"🤝 Agent A 統合エラー: {str(e)[:100]} → 片方の回答をそのまま返却")
+        return b_answer or c_answer
+
+
 def chat(question, session_id="default"):
     global conversation_histories
     conversation_history = conversation_histories.setdefault(session_id, [])
@@ -1297,18 +1410,19 @@ def chat(question, session_id="default"):
 
     # プレフィックス判定
     is_patch  = question.startswith("、") or question.startswith(",")
-    is_cloud  = (not is_patch) and (question.startswith("。") or question.startswith("."))
+    is_multi  = (not is_patch) and (question.startswith("。。。") or question.startswith("..."))  # 階層型マルチエージェント（Agent B/C → Agent A統合）
+    is_cloud  = (not is_patch) and (not is_multi) and (question.startswith("。") or question.startswith("."))
     clean_question = question.lstrip("、,。.").strip()
 
     # ローカルモード(プレフィックスなし)でも編集意図のキーワードがあればauto_patchフローに統一
     # (旧: ask_local()内の_edit_mode即書き込みルートは廃止・無効化済み)
     _edit_kws = ["修正して", "修正してください", "変更して", "変更してください", "改善して", "リファクタリング", "バグを直して", "コードを修正", "対応して", "対応してください", "確認して対応", "ログを確認して"]
-    if not is_patch and not is_cloud and any(k in clean_question for k in _edit_kws):
+    if not is_patch and not is_cloud and not is_multi and any(k in clean_question for k in _edit_kws):
         is_patch = True
 
     if is_patch:
         return _handle_patch_request(clean_question, session_id)
-    prefix = "🌐" if is_cloud else "💬"
+    prefix = "🤝" if is_multi else ("🌐" if is_cloud else "💬")
     log(f"{prefix} 質問: {clean_question[:50]}")
 
     # 引き継ぎキーワード処理
@@ -1374,7 +1488,7 @@ def chat(question, session_id="default"):
     _is_context_dependent = len(clean_question) < 25 and any(k in clean_question for k in _ctx_dep_kws)
 
     # キャッシュ検索（クラウドプレフィックス時はスキップ）
-    if not is_cloud and not _is_context_dependent:
+    if not is_cloud and not is_multi and not _is_context_dependent:
         cache_hit = cache_search(clean_question)
         if cache_hit:
             answer = cache_hit["answer"]
@@ -1390,7 +1504,13 @@ def chat(question, session_id="default"):
 
     # キャッシュミス → API呼び出し
     try:
-        if is_cloud:
+        if is_multi:
+            agent_context = get_agent_context(clean_question)
+            answer = ask_orchestrated_agents(clean_question, agent_context)
+            model_name = "🤝 Agent A（B・C統合）"
+            source = "multi_agent"
+            log(f"✅ 回答: {model_name}")
+        elif is_cloud:
             answer = ask_cloud_with_search(clean_question, conversation_history[-20:])
             model_name = "Llama-3.3-70B（Web検索）"
             source = "cloud"
@@ -1401,7 +1521,12 @@ def chat(question, session_id="default"):
             source = "local"
             log(f"✅ 回答: {model_name}")
     except Exception as e:
-        if not is_cloud:
+        if is_multi:
+            answer = f"マルチエージェント統合に失敗しました: {e}"
+            model_name = "エラー（マルチエージェント失敗）"
+            source = "error"
+            log(f"❌ マルチエージェントエラー: {str(e)[:100]}")
+        elif not is_cloud:
             # 完全ローカル厳守：通常検索（プレフィックスなし）は外部に一切フォールバックしない
             answer = f"ローカル推論に失敗しました（外部通信は行いません）: {e}"
             model_name = "エラー（ローカル推論失敗）"
@@ -1504,6 +1629,7 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
 .msg-timestamp { font-size: 10px; color: #666; margin-top: 4px; }
 .cache-tag { color: #4caf50; }
 .cloud-tag { color: #2196f3; }
+.multi-tag { color: #ff9800; }
 #input-area { display: flex; gap: 8px; padding: 12px; background: #16213e; border-top: 1px solid #333; align-items: flex-end; }
 #msg-input { flex: 1; background: #0f0f23; border: 1px solid #444; border-radius: 12px; padding: 10px 16px; color: #eee; font-size: 16px; outline: none; resize: none; min-height: 44px; max-height: 200px; line-height: 1.4; }
 #send-btn { background: #e94560; border: none; border-radius: 50%; width: 44px; height: 44px; color: white; font-size: 20px; cursor: pointer; flex-shrink: 0; }
@@ -1527,13 +1653,13 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
   </div>
   <div id="session-list" style="display:flex;flex-direction:column;gap:6px;"></div>
 </div>
-<div class="hint">💡 <strong>。</strong>クラウド ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/captcha/stats" style="color:#4caf50" target="_blank">🧩 CAPTCHA</a> ｜ <a href="/dreaming/stats" style="color:#9c27b0" target="_blank">🌙 Dreaming</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ MythoFable</a></div>
+<div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/captcha/stats" style="color:#4caf50" target="_blank">🧩 CAPTCHA</a> ｜ <a href="/dreaming/stats" style="color:#9c27b0" target="_blank">🌙 Dreaming</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ MythoFable</a></div>
 <div id="chat"></div>
 <div id="input-area">
   <label id="img-btn" title="画像・ファイルを添付" style="cursor:pointer;background:#1a3a5c;border:none;border-radius:50%;width:44px;height:44px;color:#4caf50;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">📎<input type="file" id="img-input" accept="image/*,.log,.txt,.py,.js,.ts,.json,.md,.sh,.yaml,.yml,.csv,.html,.css,.xml,.conf,.ini,.env" style="display:none" onchange="previewFile(this)"></label>
   <div style="flex:1;display:flex;flex-direction:column;gap:4px;">
     <div id="img-preview" style="display:none;position:relative;align-items:center;gap:8px;background:#16213e;border:1px solid #444;border-radius:8px;padding:6px 10px;"><img id="preview-img" style="display:none;max-height:80px;border-radius:8px;"><span id="preview-filename" style="display:none;color:#0ff;font-size:12px;">📄 <span id="preview-fname-text"></span> <span id="preview-fsize" style="color:#888;"></span></span><button onclick="clearImage()" style="background:#e94560;border:none;border-radius:50%;width:20px;height:20px;color:white;cursor:pointer;font-size:12px;flex-shrink:0;">✕</button></div>
-    <textarea id="msg-input" placeholder="。クラウド（Web検索あり）/ 通常はそのまま入力..." rows="1"></textarea>
+    <textarea id="msg-input" placeholder="。クラウド ／ 。。。マルチエージェント ／ 通常はそのまま入力..." rows="1"></textarea>
   </div>
   <button id="send-btn" onclick="sendMsg()">↑</button>
 </div>
@@ -1564,6 +1690,7 @@ function addMsg(text, role, model='', source='') {
     let icon = '🤖';
     if (source === 'cache') { icon = '💾'; tag.classList.add('cache-tag'); }
     else if (source === 'cloud') { icon = '🌐'; tag.classList.add('cloud-tag'); }
+    else if (source === 'multi_agent') { icon = '🤝'; tag.classList.add('multi-tag'); }
     tag.textContent = icon + ' ' + model;
     div.appendChild(tag);
   }
@@ -1947,7 +2074,10 @@ def chat_api():
         # 元のメッセージのプレフィックス（。/。。。）を保持し、結合後も判定できるようにする
         prefix_str = ""
         q_rest = question
-        if q_rest.startswith("。") or q_rest.startswith("."):
+        if q_rest.startswith("。。。") or q_rest.startswith("..."):
+            prefix_str = "。。。"
+            q_rest = q_rest.lstrip(".。").strip()
+        elif q_rest.startswith("。") or q_rest.startswith("."):
             prefix_str = "。"
             q_rest = q_rest.lstrip(".。").strip()
         composed_question = (
@@ -2008,6 +2138,7 @@ a.back { display: inline-block; margin-top: 20px; color: #4caf50; text-decoratio
 <tr><th>プレフィックス</th><th>モード</th><th>キャッシュ</th><th>Web検索</th><th>LLM</th></tr>
 <tr><td>（なし）</td><td>通常</td><td><span class="badge yes">✅ 使う</span></td><td><span class="badge no">❌</span></td><td>ローカルLLM（llm-jp-3-1.8B, llama.cpp, 外部通信なし）</td></tr>
 <tr><td>。</td><td>クラウド</td><td><span class="badge no">❌</span></td><td><span class="badge yes">✅ DDG</span></td><td>OpenRouter（高精度）</td></tr>
+<tr><td>。。。</td><td>🤝 マルチエージェント</td><td><span class="badge no">❌</span></td><td><span class="badge yes">✅ DDG</span></td><td>Agent B・C（OpenRouter）→ Agent Aが統合</td></tr>
 <tr><td>、 または ,</td><td>コード自動修正</td><td><span class="badge no">❌</span></td><td><span class="badge no">❌</span></td><td>OpenRouter（複数モデル自動フォールバック）</td></tr>
 
 </table>
@@ -2016,6 +2147,7 @@ a.back { display: inline-block; margin-top: 20px; color: #4caf50; text-decoratio
 <table>
 <tr><th>シーン</th><th>おすすめ</th></tr>
 <tr><td>普通の質問</td><td>（なし）— キャッシュヒット時は瞬時、未ヒット時はローカルLLM（外部通信なし）</td></tr>
+<tr><td>多角的に検討したい質問</td><td>。。。— Agent B・Cが個別に回答し、Agent Aが統合した最終回答のみ返す（やや時間がかかる）</td></tr>
 </table>
 
 <h2>🛠️ コード自動修正＋git連携</h2>
