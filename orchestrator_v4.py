@@ -1294,18 +1294,21 @@ def ask_orchestrated_agents(question, agent_context=""):
     else:
         search_context = ""
 
+    _candidate_pool = filter_alive_models([
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "nousresearch/hermes-3-llama-3.1-405b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "qwen/qwen3-next-80b-a3b-instruct:free",
+        "openai/gpt-oss-20b:free",
+    ], provider="openrouter") or ["meta-llama/llama-3.3-70b-instruct:free"]
     sub_agents = [
-        {"name": "Agent B", "model": "nvidia/nemotron-3-ultra-550b-a55b:free"},
-        {"name": "Agent C", "model": "nousresearch/hermes-3-llama-3.1-405b:free"},
+        {"name": "Agent B", "model": _candidate_pool[0]},
+        {"name": "Agent C", "model": _candidate_pool[1] if len(_candidate_pool) > 1 else _candidate_pool[0]},
     ]
     neutral_role = f"あなたは優秀なAIアシスタントです。常に日本語で、簡潔かつ正確に回答してください。思考過程は不要です。{search_context}"
 
     def query_sub_agent(agent):
-        models_to_try = [agent["model"]] + filter_alive_models([
-            "qwen/qwen3-next-80b-a3b-instruct:free",
-            "nvidia/nemotron-3-super-120b-a12b:free",
-            "openai/gpt-oss-20b:free",
-        ], provider="openrouter")
+        models_to_try = [agent["model"]] + [m for m in _candidate_pool if m != agent["model"]]
         for model in models_to_try:
             try:
                 r = requests.post(
@@ -1507,7 +1510,7 @@ def chat(question, session_id="default"):
         if is_multi:
             agent_context = get_agent_context(clean_question)
             answer = ask_orchestrated_agents(clean_question, agent_context)
-            model_name = "🤝 Agent A（B・C統合）"
+            model_name = "Agent A（B・C統合）"
             source = "multi_agent"
             log(f"✅ 回答: {model_name}")
         elif is_cloud:
