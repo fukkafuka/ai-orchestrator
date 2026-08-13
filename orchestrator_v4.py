@@ -1761,19 +1761,6 @@ function clearImage() {
   document.getElementById('img-input').value = '';
 }
 
-// 履歴クリア
-function clearHistory() {
-  if (!confirm('この会話の履歴をクリアしますか？')) return;
-  fetch('/session/clear', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json', 'X-Auth-Token': AUTH_TOKEN},
-    body: JSON.stringify({session_id: getSessionId()})
-  }).then(r => r.json()).then(d => {
-    document.getElementById('messages').innerHTML = '';
-    addMessage('system', '✅ 会話履歴をクリアしました。');
-  }).catch(e => alert('クリア失敗: ' + e));
-}
-
 // セッションID管理
   function getSessionId() {
     if (!sessionStorage.getItem('orc_sid')) {
@@ -1842,13 +1829,20 @@ function clearHistory() {
 }
 
 async function clearHistory() {
-  await fetch('/session/clear', {
-    method: 'POST',
-    headers: {'X-Token': '{{ token }}', 'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: getSessionId()})
-  });
-  chat.innerHTML = '';
-  addMsg('履歴をクリアしました', 'ai');
+  if (!confirm('この会話の履歴をクリアしますか？')) return;
+  try {
+    const r = await fetch('/session/clear', {
+      method: 'POST',
+      headers: {'X-Token': '{{ token }}', 'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: getSessionId()})
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    chat.innerHTML = '';
+    addMsg('履歴をクリアしました', 'ai');
+    if (typeof loadSessionList === 'function') loadSessionList();
+  } catch (e) {
+    addMsg('❌ 履歴クリアに失敗しました: ' + e, 'ai');
+  }
 }
 
 let _sessionPanelOpen = false;
@@ -2712,7 +2706,9 @@ def list_sessions():
             "message_count": cnt,
         })
     conn.close()
-    return jsonify(result)
+    resp = jsonify(result)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 @app.route('/sessions/rename', methods=['POST'])
 def rename_session():
