@@ -1763,12 +1763,12 @@ function clearImage() {
 
 // セッションID管理
   function getSessionId() {
-    if (!sessionStorage.getItem('orc_sid')) {
+    if (!localStorage.getItem('orc_sid')) {
       const a = new Uint8Array(8);
       crypto.getRandomValues(a);
-      sessionStorage.setItem('orc_sid', Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join(''));
+      localStorage.setItem('orc_sid', Array.from(a).map(b=>b.toString(16).padStart(2,'0')).join(''));
     }
-    return sessionStorage.getItem('orc_sid');
+    return localStorage.getItem('orc_sid');
   }
   function getSessionCode() { return getSessionId().slice(-8); }
   window.addEventListener('DOMContentLoaded', function() {
@@ -1887,12 +1887,12 @@ async function loadSessionList() {
 }
 
 function switchSession(sessionId) {
-  sessionStorage.setItem('orc_sid', sessionId);
+  localStorage.setItem('orc_sid', sessionId);
   location.reload();
 }
 
 function startNewSession() {
-  sessionStorage.removeItem('orc_sid');
+  localStorage.removeItem('orc_sid');
   location.reload();
 }
 
@@ -1985,7 +1985,10 @@ def logout():
 def index():
     if not check_web_auth():
         return redirect('/login')
-    return render_template_string(HTML, token=TOKEN)
+    resp = render_template_string(HTML, token=TOKEN)
+    resp = app.make_response(resp)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 MAX_FILE_CHARS = 8000
 
