@@ -1849,7 +1849,7 @@ async function clearHistory() {
 }
 
 async function clearAllSessions() {
-  if (!confirm('本当に全てのセッションを削除しますか？\nこの操作は取り消せません。')) return;
+  if (!confirm('本当に全てのセッションを削除しますか？\\nこの操作は取り消せません。')) return;
   if (!confirm('最終確認です。全セッションの会話履歴が完全に削除されます。よろしいですか？')) return;
   try {
     const r = await fetch('/sessions/clear_all', {
