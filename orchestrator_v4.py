@@ -1655,6 +1655,9 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
     <button onclick="startNewSession()" style="background:#1a3a5c;color:#4caf50;border:none;padding:3px 8px;border-radius:6px;font-size:11px;cursor:pointer;">＋ 新規セッション</button>
   </div>
   <div id="session-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+  <div style="margin-top:10px;border-top:1px solid #333;padding-top:8px;text-align:right;">
+    <button onclick="clearAllSessions()" style="background:#3a1a1a;color:#e94560;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">🗑️ 全セッション削除</button>
+  </div>
 </div>
 <div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/captcha/stats" style="color:#4caf50" target="_blank">🧩 CAPTCHA</a> ｜ <a href="/dreaming/stats" style="color:#9c27b0" target="_blank">🌙 Dreaming</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ MythoFable</a></div>
 <div id="chat"></div>
@@ -1842,6 +1845,22 @@ async function clearHistory() {
     if (typeof loadSessionList === 'function') loadSessionList();
   } catch (e) {
     addMsg('❌ 履歴クリアに失敗しました: ' + e, 'ai');
+  }
+}
+
+async function clearAllSessions() {
+  if (!confirm('本当に全てのセッションを削除しますか？\nこの操作は取り消せません。')) return;
+  if (!confirm('最終確認です。全セッションの会話履歴が完全に削除されます。よろしいですか？')) return;
+  try {
+    const r = await fetch('/sessions/clear_all', {
+      method: 'POST',
+      headers: {'X-Token': '{{ token }}', 'Content-Type': 'application/json'}
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    localStorage.removeItem('orc_sid');
+    location.reload();
+  } catch (e) {
+    alert('❌ 全セッション削除に失敗しました: ' + e);
   }
 }
 
@@ -2752,6 +2771,24 @@ def session_clear():
         log('session_clear DB error: ' + str(e))
     log(f"🗑️ セッション履歴クリア: {session_id[-8:]}")
     return jsonify({"status": "cleared", "session_id": session_id})
+
+@app.route('/sessions/clear_all', methods=['POST'])
+def sessions_clear_all():
+    if not check_auth():
+        return jsonify({"error": "Unauthorized"}), 401
+    global conversation_histories
+    conversation_histories = {}
+    try:
+        conn = sqlite3.connect(CACHE_DB)
+        conn.execute('DELETE FROM conversations')
+        conn.execute('DELETE FROM session_names')
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        log('sessions_clear_all DB error: ' + str(e))
+        return jsonify({"error": str(e)}), 500
+    log("🗑️ 全セッション削除")
+    return jsonify({"status": "cleared_all"})
 
 @app.route('/cache/clear', methods=['POST'])
 def cache_clear():
