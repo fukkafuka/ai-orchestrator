@@ -2251,7 +2251,7 @@ def dreaming_stats():
             h = int(ratio * 70) + 10
             _rgb = tuple(int(_c_low[i] + (_c_high[i] - _c_low[i]) * ratio) for i in range(3))
             bar_color = 'rgb(' + str(_rgb[0]) + ',' + str(_rgb[1]) + ',' + str(_rgb[2]) + ')'
-            karma_bar_html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-label="karma: ' + str(k) + '"></div><div class="karma-label">' + l + '</div></div>'
+            karma_bar_html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center"><div style="font-size:10px;color:#ccc;margin-bottom:2px;white-space:nowrap;">' + str(k) + '</div><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-label="karma: ' + str(k) + '"></div><div class="karma-label">' + l + '</div></div>'
     else:
         karma_bar_html = "データなし"
 
