@@ -2251,7 +2251,7 @@ def dreaming_stats():
             h = int(ratio * 70) + 10
             _rgb = tuple(int(_c_low[i] + (_c_high[i] - _c_low[i]) * ratio) for i in range(3))
             bar_color = 'rgb(' + str(_rgb[0]) + ',' + str(_rgb[1]) + ',' + str(_rgb[2]) + ')'
-            karma_bar_html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-karma="' + str(k) + '" data-time="' + l + '" onclick="showKarmaTip(event,this)"></div><div class="karma-label">' + l + '</div></div>'
+            karma_bar_html += '<div style="flex:0 0 32px;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-karma="' + str(k) + '" data-time="' + l + '" onclick="showKarmaTip(event,this)"></div><div class="karma-label">' + l + '</div></div>'
     else:
         karma_bar_html = "データなし"
 
@@ -2272,7 +2272,7 @@ h2 { font-size: 16px; margin: 20px 0 10px; color: #aaa; }
 .card { background: #16213e; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
 .card p { font-size: 14px; line-height: 1.6; color: #ddd; }
 .tag { display: inline-block; background: #0f3460; border-radius: 8px; padding: 4px 10px; margin: 4px; font-size: 12px; }
-.karma-bar { display: flex; align-items: flex-end; gap: 6px; margin-top: 10px; padding-top: 24px; }
+.karma-bar { display: flex; align-items: flex-end; gap: 6px; margin-top: 10px; padding-top: 24px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
 .karma-col { flex: none; width: 100%; background: #9c27b0; border-radius: 4px 4px 0 0; min-height: 4px; position: relative; cursor: pointer; }
 .karma-label { font-size: 11px; color: #ccc; text-align: center; margin-top: 4px; font-weight: 500; }
 .karma-tip { position: fixed; background: #333; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; white-space: nowrap; z-index: 100; display: none; pointer-events: none; transform: translateX(-50%); }
