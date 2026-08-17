@@ -2310,9 +2310,15 @@ function showKarmaTip(ev, el) {
   }
   const rect = el.getBoundingClientRect();
   tip.textContent = 'karma: ' + el.dataset.karma + '（' + el.dataset.time + '）';
-  tip.style.left = (rect.left + rect.width / 2) + 'px';
-  tip.style.top = Math.max(4, rect.top - 28) + 'px';
   tip.style.display = 'block';
+  tip.style.left = '0px';
+  const tipW = tip.offsetWidth;
+  const margin = 6;
+  let center = rect.left + rect.width / 2;
+  const half = tipW / 2;
+  center = Math.min(Math.max(center, half + margin), window.innerWidth - half - margin);
+  tip.style.left = center + 'px';
+  tip.style.top = Math.max(4, rect.top - 28) + 'px';
   tip.dataset.for = key;
 }
 document.addEventListener('click', function() {
