@@ -2251,7 +2251,7 @@ def dreaming_stats():
             h = int(ratio * 70) + 10
             _rgb = tuple(int(_c_low[i] + (_c_high[i] - _c_low[i]) * ratio) for i in range(3))
             bar_color = 'rgb(' + str(_rgb[0]) + ',' + str(_rgb[1]) + ',' + str(_rgb[2]) + ')'
-            karma_bar_html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center"><div style="font-size:10px;color:#ccc;margin-bottom:2px;white-space:nowrap;">' + str(k) + '</div><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-label="karma: ' + str(k) + '"></div><div class="karma-label">' + l + '</div></div>'
+            karma_bar_html += '<div style="flex:1;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-karma="' + str(k) + '" data-time="' + l + '" onclick="showKarmaTip(event,this)"></div><div class="karma-label">' + l + '</div></div>'
     else:
         karma_bar_html = "データなし"
 
@@ -2272,11 +2272,10 @@ h2 { font-size: 16px; margin: 20px 0 10px; color: #aaa; }
 .card { background: #16213e; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
 .card p { font-size: 14px; line-height: 1.6; color: #ddd; }
 .tag { display: inline-block; background: #0f3460; border-radius: 8px; padding: 4px 10px; margin: 4px; font-size: 12px; }
-.karma-bar { display: flex; align-items: flex-end; gap: 6px; height: 80px; margin-top: 10px; }
-.karma-col { flex: none; width: 100%; background: #9c27b0; border-radius: 4px 4px 0 0; min-height: 4px; position: relative; cursor: default; }
-.karma-col::after { content: attr(data-label); position: absolute; bottom: 105%; left: 50%; transform: translateX(-50%); background: #333; color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 10px; white-space: nowrap; display: none; z-index: 10; }
-.karma-col:hover::after { display: block; }
+.karma-bar { display: flex; align-items: flex-end; gap: 6px; margin-top: 10px; padding-top: 24px; }
+.karma-col { flex: none; width: 100%; background: #9c27b0; border-radius: 4px 4px 0 0; min-height: 4px; position: relative; cursor: pointer; }
 .karma-label { font-size: 11px; color: #ccc; text-align: center; margin-top: 4px; font-weight: 500; }
+.karma-tip { position: fixed; background: #333; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; white-space: nowrap; z-index: 100; display: none; pointer-events: none; transform: translateX(-50%); }
 .topic { background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 13px; color: #ccc; }
 .trigger { background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 12px; color: #4caf50; }
 a { color: #9c27b0; text-decoration: none; display: inline-block; margin-top: 20px; }
@@ -2299,6 +2298,27 @@ a { color: #9c27b0; text-decoration: none; display: inline-block; margin-top: 20
 <h2>🚫 避けるトピック</h2>
 <div class="card">""" + avoid_html + """</div>
 <a href="/">← チャットに戻る</a>
+<div class="karma-tip" id="karma-tip"></div>
+<script>
+function showKarmaTip(ev, el) {
+  ev.stopPropagation();
+  const tip = document.getElementById('karma-tip');
+  const key = el.dataset.karma + '_' + el.dataset.time;
+  if (tip.dataset.for === key && tip.style.display === 'block') {
+    tip.style.display = 'none';
+    return;
+  }
+  const rect = el.getBoundingClientRect();
+  tip.textContent = 'karma: ' + el.dataset.karma + '（' + el.dataset.time + '）';
+  tip.style.left = (rect.left + rect.width / 2) + 'px';
+  tip.style.top = Math.max(4, rect.top - 28) + 'px';
+  tip.style.display = 'block';
+  tip.dataset.for = key;
+}
+document.addEventListener('click', function() {
+  document.getElementById('karma-tip').style.display = 'none';
+});
+</script>
 </body>
 </html>"""
     return html
