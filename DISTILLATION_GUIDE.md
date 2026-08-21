@@ -1,6 +1,7 @@
 # ローカルLLM再蒸留ガイド
 
-`llm-jp-3-1.8b-instruct3` をLoRAでファインチューニングし直すときの手順書。
+`llm-jp-3.1-1.8b-instruct4`（2026-08-19〜、旧`llm-jp-3-1.8b-instruct3`から乗り換え）を
+LoRAでファインチューニングし直すときの手順書。
 会話するだけではローカルモデルの重みは更新されないため、このサイクルを
 定期的（目安: 月1回程度、または応答の質が気になったタイミング）に回す。
 
@@ -44,36 +45,52 @@ Claudeは `orchestrator_v4.py` の `ask_local()` に埋め込まれているsyst
 
 ## ③ LoRA再学習（Google Colab）
 
-`distill_claude_authored.jsonl` を最新化してからColabノートブックで学習を回す。
+`distill_claude_authored.jsonl` と `orchestrator_lora_distill.ipynb` を最新化してから
+Colabノートブックで学習を回す。
 
 ```bash
 cd ~/ai-orchestrator && git pull
 ```
 
-- ベースモデル: `llm-jp-3-1.8b-instruct3`
+- ベースモデル: `llm-jp/llm-jp-3.1-1.8b-instruct4`（同1.8Bサイズで日本語MT-Bench 4.64→6.30）
 - 学習データ: `distill_claude_authored.jsonl`（`instruction`/`output`形式）
-- 過去に使ったノートブックをそのまま流用（学習率・epoch数などのハイパラは
-  前回と同じ設定を出発点にし、データ件数が増えた分だけepoch数を様子見で調整する）
+- ノートブック: `orchestrator_lora_distill.ipynb`（学習率・epoch数などのハイパラは
+  ノートブック内の値を出発点にし、データ件数が増えた分だけepoch数を様子見で調整する）
 
 ## ④ マージ
 
 学習済みLoRAアダプタをベースモデルにマージし、1つのモデルにまとめる。
+（ノートブックの6.マージのセルで実施済み）
 
 ## ⑤ gguf変換
 
-```bash
-# 量子化形式は Q4_K_M を踏襲（他のツール類との互換性・速度のバランスが良いため）
-```
-
-llama.cpp付属の変換スクリプトで `.gguf` に変換し、量子化する。
+量子化形式は `Q4_K_M` を踏襲（他のツール類との互換性・速度のバランスが良いため）。
+ノートブック内でllama.cppをclone・ビルドし、GGUF(f16)変換 → Q4_K_M量子化まで実施する。
+出力ファイル名は `llm-jp-3.1-1.8b-instruct4-Q4_K_M.gguf`
+（旧モデル `llm-jp-3-1.8b-instruct3-Q4_K_M.gguf` とは別名にしてあるので、
+そのまま両方を残しておける＝これ自体がロールバック手段になる）。
 
 ## ⑥ デプロイ
 
+**旧ファイルは削除せず、新ファイルを並べて配置するだけ。**
+
 ```bash
-cd ~/ai-orchestrator
-# 新しいggufファイルを配置(既存ファイルは念のためリネームして残しておく)
-mv llm-jp-3-1.8b-instruct3-Q4_K_M.gguf llm-jp-3-1.8b-instruct3-Q4_K_M.gguf.bak_$(date +%Y%m%d)
-mv <新しいggufファイル> llm-jp-3-1.8b-instruct3-Q4_K_M.gguf
+cd ~/ai-orchestrator/llama.cpp/models
+# ダウンロードした llm-jp-3.1-1.8b-instruct4-Q4_K_M.gguf をこのディレクトリに置く
+ls -la  # llm-jp-3-1.8b-instruct3-Q4_K_M.gguf (旧) と
+        # llm-jp-3.1-1.8b-instruct4-Q4_K_M.gguf (新) が両方あることを確認
+```
+
+`orchestrator_v4.py` の `LOCAL_MODEL_PATH` を新ファイルに向ける（Claudeがパッチとして提示）:
+
+```python
+# 変更前
+LOCAL_MODEL_PATH = os.path.expanduser("~/ai-orchestrator/llama.cpp/models/llm-jp-3-1.8b-instruct3-Q4_K_M.gguf")
+# 変更後
+LOCAL_MODEL_PATH = os.path.expanduser("~/ai-orchestrator/llama.cpp/models/llm-jp-3.1-1.8b-instruct4-Q4_K_M.gguf")
+```
+
+```bash
 launchctl kickstart -k gui/$(id -u)/com.fk.orchestrator
 sleep 30
 lsof -i :11437 | grep LISTEN
@@ -83,20 +100,28 @@ lsof -i :11437 | grep LISTEN
 
 - プレフィックスなしで、①で拾った質問のうち代表的なものをいくつか投げてみる
 - 応答が壊れていないか（変な繰り返し・文字化けがないか）を確認
-- 明らかに悪化していたら `.bak_*` にリネームした旧ファイルへ戻す
+- 明らかに悪化していたら、**`LOCAL_MODEL_PATH` を旧ファイル名に戻すだけ**でよい
+  （旧ファイルはそのまま残っているので、ファイルのリネームや復元操作は不要）
+
+```python
+# ロールバック: 1行だけ戻す
+LOCAL_MODEL_PATH = os.path.expanduser("~/ai-orchestrator/llama.cpp/models/llm-jp-3-1.8b-instruct3-Q4_K_M.gguf")
+```
 
 ```bash
-mv llm-jp-3-1.8b-instruct3-Q4_K_M.gguf llm-jp-3-1.8b-instruct3-Q4_K_M.gguf.new_$(date +%Y%m%d)
-mv llm-jp-3-1.8b-instruct3-Q4_K_M.gguf.bak_YYYYMMDD llm-jp-3-1.8b-instruct3-Q4_K_M.gguf
 launchctl kickstart -k gui/$(id -u)/com.fk.orchestrator
 ```
+
+問題なければ、旧ファイルは念のためしばらく残しておき、次回サイクルが安定してから削除する。
 
 ---
 
 ## メモ
 
+- ベースモデル: 2026-08-19に `llm-jp-3-1.8b-instruct3` → `llm-jp-3.1-1.8b-instruct4` へ乗り換え
 - `distill_claude_authored.jsonl` の件数: 2026-08-17時点で54件（39件→+15件）
 - 蒸留データはsystemプロンプトの方針と一貫性を持たせること
   （プロンプト側の指針とファインチューニング側の口調がズレていると効果が薄れる）
-- Colab側の具体的なハイパーパラメータ設定は本ガイドには含めていない
-  （ノートブック側で管理。次回実行時に値をこのファイルに追記してもよい）
+- LoRAの`target_modules`はLlama系アーキテクチャ共通のため、instruct3→instruct4の
+  乗り換えでも変更不要（q/k/v/o_proj + gate/up/down_proj）
+
