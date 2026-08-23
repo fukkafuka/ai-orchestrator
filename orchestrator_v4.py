@@ -45,7 +45,7 @@ MODEL_CLASSIFY = "meta-llama/llama-3.3-70b-instruct:free" # 分類用
 # ローカル推論設定（llama.cpp llama-completion直接実行、外部通信なし。失敗時も外部フォールバックしない）
 # 注: llama-cliは対話ループ仕様（-no-cnv未サポート）のためllama-completionを使用
 LLAMA_COMPLETION_BIN = os.path.expanduser("~/llama.cpp/build/bin/llama-completion")
-LOCAL_MODEL_PATH = os.path.expanduser("~/ai-orchestrator/llama.cpp/models/llm-jp-3-1.8b-instruct3-Q4_K_M.gguf")
+LOCAL_MODEL_PATH = os.path.expanduser("~/ai-orchestrator/llama.cpp/models/llm-jp-3.1-1.8b-instruct4-Q4_K_M.gguf")
 LOCAL_MODEL_TIMEOUT = 300  # 秒（Intel Mac, CPU推論のため余裕を持たせる）
 
 # ローカルVision設定（llama-mtmd-cli / SmolVLM-500M, 外部通信なし。通常モード+画像で使用）
