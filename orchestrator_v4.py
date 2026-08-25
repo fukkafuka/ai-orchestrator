@@ -655,7 +655,7 @@ Pythonコード修正は、ユーザーが明示的に依頼した場合のみ�
             ],
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=LOCAL_MODEL_TIMEOUT,
             stdin=subprocess.DEVNULL
         )
         print(f"### llama.cpp 終了 {time.time()-t0:.1f} 秒")
