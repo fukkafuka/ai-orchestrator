@@ -35,3 +35,4 @@ logs/
 *.autopatch_backup_*
 debug_raw/
 *.bak_*
+harvest_state.json
