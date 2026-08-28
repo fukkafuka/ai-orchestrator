@@ -138,7 +138,7 @@ def call_openrouter_for_rewrite(messages, max_tokens=800, temperature=0.5):
         models_to_try = ["meta-llama/llama-3.3-70b-instruct:free"]
 
     import requests
-    last_error = None
+    errors = []
     for m in models_to_try:
         try:
             r = requests.post(
@@ -160,13 +160,13 @@ def call_openrouter_for_rewrite(messages, max_tokens=800, temperature=0.5):
             )
             data = r.json()
             if "choices" not in data:
-                last_error = f"{m}: {data.get('error', {}).get('message', str(data))}"
+                errors.append(f"{m}: {data.get('error', {}).get('message', str(data))}")
                 continue
             return data["choices"][0]["message"]["content"] or ""
         except Exception as e:
-            last_error = f"{m} exception: {e}"
+            errors.append(f"{m} exception: {e}")
             continue
-    log(f"⚠️ OpenRouter全モデル失敗: {last_error}")
+    log(f"⚠️ OpenRouter全モデル失敗: {' / '.join(errors)}")
     return None
 
 
