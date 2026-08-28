@@ -130,12 +130,11 @@ def call_openrouter_for_rewrite(messages, max_tokens=800, temperature=0.5):
     if not OPENROUTER_API_KEY:
         return None
     models_to_try = filter_alive_models([
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "qwen/qwen3-next-80b-a3b-instruct:free",
-        "openai/gpt-oss-20b:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/free",
     ], provider="openrouter")
     if not models_to_try:
-        models_to_try = ["meta-llama/llama-3.3-70b-instruct:free"]
+        models_to_try = ["openrouter/free"]
 
     import requests
     errors = []

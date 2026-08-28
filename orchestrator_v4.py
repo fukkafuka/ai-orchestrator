@@ -39,8 +39,8 @@ GROQ_BASE = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "openai/gpt-oss-120b"  # 2026-08-01: llama-3.3-70b-versatileはGroqが2026-08-16に廃止予定のため移行(公式推奨の移行先)
 
 # モデル設定
-MODEL_CLOUD   = "meta-llama/llama-3.3-70b-instruct:free"  # クラウド（;プレフィックス）
-MODEL_CLASSIFY = "meta-llama/llama-3.3-70b-instruct:free" # 分類用
+MODEL_CLOUD   = "nvidia/nemotron-3-super-120b-a12b:free"  # クラウド（;プレフィックス）
+MODEL_CLASSIFY = "nvidia/nemotron-3-super-120b-a12b:free" # 分類用
 
 # ローカル推論設定（llama.cpp llama-completion直接実行、外部通信なし。失敗時も外部フォールバックしない）
 # 注: llama-cliは対話ループ仕様（-no-cnv未サポート）のためllama-completionを使用
@@ -372,8 +372,9 @@ def ask_cloud_with_search(question, messages):
 def call_openrouter(model, messages, max_tokens=1000, temperature=0.7):
     # 指定モデル + フォールバックモデル一覧
     fallback_models = [model] + filter_alive_models([
-        "qwen/qwen3-next-80b-a3b-instruct:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/free",
+        "qwen/qwen3-next-80b-a3b-instruct:free",
         "openai/gpt-oss-20b:free",
     ], provider="openrouter")
     # 重複除去（順序保持）
@@ -1295,12 +1296,13 @@ def ask_orchestrated_agents(question, agent_context=""):
         search_context = ""
 
     _candidate_pool = filter_alive_models([
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "openrouter/free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nousresearch/hermes-3-llama-3.1-405b:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
         "qwen/qwen3-next-80b-a3b-instruct:free",
         "openai/gpt-oss-20b:free",
-    ], provider="openrouter") or ["meta-llama/llama-3.3-70b-instruct:free"]
+    ], provider="openrouter") or ["openrouter/free"]
     sub_agents = [
         {"name": "Agent B", "model": _candidate_pool[0]},
         {"name": "Agent C", "model": _candidate_pool[1] if len(_candidate_pool) > 1 else _candidate_pool[0]},
@@ -1566,6 +1568,7 @@ def chat(question, session_id="default"):
                     log(f"⚠️ Groqレート制限検知 → OpenRouterで再試行")
                     or_fallback_models = filter_alive_models([
                         "nvidia/nemotron-3-super-120b-a12b:free",
+                        "openrouter/free",
                         "openai/gpt-oss-20b:free",
                         "qwen/qwen3-next-80b-a3b-instruct:free",
                     ], provider="openrouter")
