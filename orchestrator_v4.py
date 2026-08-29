@@ -1288,10 +1288,21 @@ def ask_orchestrated_agents(question, agent_context=""):
     Agent A : B・Cの回答を統合し、最終回答を1本にまとめてユーザーへ返す（B・Cの生回答はログのみ）"""
     import concurrent.futures
 
-    if DDG_AVAILABLE:
+    # 2026-08-29: 検索が不要な質問(フォローアップ・AI自身についてのメタな質問)でも
+    # 無条件に検索していたため、無関係な検索結果(例:「自己紹介して」→就活テンプレート等)に
+    # モデルが引きずられて不自然な回答をする問題が発覚(ask_cloud_with_searchと同じ対処を導入)
+    _follow_kws = ['それ', 'これ', 'その', 'あれ', 'もっと', '詳しく', '続き', '具体的', '使用例', '例を挙げ']
+    _meta_kws = ['自己紹介', 'あなたは誰', 'あなたについて', '何ができる', '得意なこと', '名前は', 'あなたの名前']
+    _skip_search = (len(question) < 25 and any(k in question for k in _follow_kws)) or \
+                   any(k in question for k in _meta_kws)
+
+    if DDG_AVAILABLE and not _skip_search:
         search_result = search_web(question)
+        _err_kws = ['エラー', 'Error', 'error', 'Unsupported', 'protocol', 'Exception', 'failed']
+        if not search_result or any(k in search_result for k in _err_kws) or len(search_result) < 30:
+            search_result = ''
         log(f"🤝 Orchestrated Web検索結果取得: {len(search_result)}文字")
-        search_context = f"\n\nWeb search results (use if relevant to the question):\n{search_result}"
+        search_context = f"\n\nWeb search results (use if relevant to the question):\n{search_result}" if search_result else ""
     else:
         search_context = ""
 
