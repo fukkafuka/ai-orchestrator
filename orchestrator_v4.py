@@ -1517,7 +1517,7 @@ def chat(question, session_id="default"):
             log(f"✅ 回答: {model_name}")
         elif is_cloud:
             answer = ask_cloud_with_search(clean_question, conversation_history[-20:])
-            model_name = "Llama-3.3-70B（Web検索）"
+            model_name = "Nemotron-3-Super-120B（Web検索）"
             source = "cloud"
             log(f"✅ 回答: {model_name}")
         else:
@@ -1559,7 +1559,7 @@ def chat(question, session_id="default"):
                 if "choices" not in _data:
                     raise Exception(f"Groq error: {_data.get('error', {}).get('message', str(_data))}")
                 answer = _data["choices"][0]["message"]["content"]
-                model_name = "Groq llama-3.3-70B（Web検索）"
+                model_name = "Groq gpt-oss-120B（Web検索）"
                 source = "fallback"
                 log(f"✅ フォールバック: {model_name}")
             except Exception as e2:
