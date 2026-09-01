@@ -21,6 +21,7 @@ from flask import Flask, request, jsonify, render_template_string, redirect
 
 import dotenv
 import auto_patch
+import folder_agent
 from model_status import filter_alive_models
 try:
     from ddgs import DDGS
@@ -1423,6 +1424,33 @@ def chat(question, session_id="default"):
         elif _stripped in ("キャンセル", "却下", "いいえ", "中止", "no", "NO"):
             auto_patch.delete_pending_patch(CACHE_DB, session_id)
             return {"answer": f"❌ 修正案（{_pending['filename']}）をキャンセルしました。", "model": "system", "source": "system"}
+
+    # ── フォルダエージェント: コマンド/commit承認待ちチェック ──
+    _agent_pending = folder_agent.get_agent_session(CACHE_DB, session_id)
+    if _agent_pending and _agent_pending.get("waiting_for"):
+        _stripped = question.strip()
+        if _stripped in ("承認", "はい", "OK", "ok", "Ok", "yes", "YES", "適用", "適用して", "実行"):
+            answer = folder_agent.resume_after_command(CACHE_DB, session_id, approved=True)
+            return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
+        elif _stripped in ("キャンセル", "却下", "いいえ", "中止", "no", "NO"):
+            answer = folder_agent.resume_after_command(CACHE_DB, session_id, approved=False)
+            return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
+
+    # ── フォルダエージェント: 「#<フォルダ>: <タスク>」で新規起動 ──
+    if question.startswith("#"):
+        _body = question[1:].strip()
+        if ":" in _body:
+            _folder_raw, _task = _body.split(":", 1)
+        elif "：" in _body:
+            _folder_raw, _task = _body.split("：", 1)
+        else:
+            return {"answer": "形式は「#<フォルダパス>: <やってほしいこと>」です。例: #ai-orchestrator: READMEに一文追加して",
+                    "model": "system", "source": "system"}
+        _target_folder, _err = folder_agent.resolve_target_folder(_folder_raw)
+        if _err:
+            return {"answer": f"❌ {_err}", "model": "system", "source": "error"}
+        answer = folder_agent.start_task(CACHE_DB, session_id, _target_folder, _task.strip())
+        return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
 
     # プレフィックス判定
     is_patch  = question.startswith("、") or question.startswith(",")
