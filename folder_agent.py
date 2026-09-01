@@ -215,6 +215,16 @@ def execute_approved_command(target_folder, command):
         return f"❌ 実行エラー: {e}"
 
 
+def has_uncommitted_changes(target_folder):
+    """git status --porcelainで未コミットの変更があるか確認する"""
+    try:
+        result = subprocess.run(["git", "status", "--porcelain"], cwd=target_folder,
+                                 timeout=15, capture_output=True, text=True)
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
 def execute_approved_commit(target_folder, message):
     try:
         subprocess.run(["git", "add", "-A"], cwd=target_folder, timeout=30, check=True,
@@ -353,6 +363,12 @@ def run_loop(db_path, session_id, target_folder, task, messages, step_count):
             args = {}
 
         if fn_name == "finish_task":
+            _uncommitted = has_uncommitted_changes(target_folder)
+            if _uncommitted:
+                messages.append({"role": "tool", "tool_call_id": call["id"], "content":
+                    "⚠️ finish_taskを呼ぶ前に、まだコミットされていない変更が残っています。"
+                    "先にgit_commitを提案してください。\n未コミットの変更:\n" + _uncommitted[:1000]})
+                continue
             delete_agent_session(db_path, session_id)
             return f"✅ 完了: {args.get('summary', '(要約なし)')}"
 
