@@ -201,7 +201,12 @@ def tool_write_file(target_folder, path, content):
 
 def execute_approved_command(target_folder, command):
     if not is_command_allowed(command):
-        return f"❌ 許可されていないコマンドです(ホワイトリスト外): {command}"
+        return (
+            f"❌ 許可されていないコマンドです(ホワイトリスト外): {command}\n"
+            f"許可されているのは次の形式のみです: {', '.join(ALLOWED_COMMAND_PREFIXES)}\n"
+            "同じ、または類似のコマンドを再提案しないでください。"
+            "診断が必須でなければ、これ以上run_commandは使わずにfinish_taskで終了してください。"
+        )
     try:
         result = subprocess.run(
             command, shell=True, cwd=target_folder,
