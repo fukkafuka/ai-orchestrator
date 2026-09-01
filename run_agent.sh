@@ -14,7 +14,7 @@ fi
 echo $$ > "$LOCK"
 echo "[$(date '+%H:%M:%S')] 🚀 run_agent.sh starting agent_claude" >> $LOG
 
-/usr/bin/python3 -W ignore /Users/fk/ai-agent/moltbook/agent_claude.py >> $LOG 2>&1
+/Users/fk/.pyenv/versions/3.11.9/bin/python3 -W ignore /Users/fk/ai-agent/moltbook/agent_claude.py >> $LOG 2>&1
 EXIT_CODE=$?
 
 rm -f "$LOCK"
