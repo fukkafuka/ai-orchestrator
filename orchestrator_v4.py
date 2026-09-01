@@ -1430,16 +1430,22 @@ def chat(question, session_id="default"):
     if _agent_pending and _agent_pending.get("waiting_for"):
         _waiting_for = _agent_pending["waiting_for"]
         _stripped = question.strip()
+        log(f"🛠 folder_agent: 承認待ち中(waiting_for={_waiting_for}) への返信を受信: {question[:50]}")
         if _waiting_for == "text_reply":
             # モデルが平文で質問・確認をしてきた状態。内容を問わずそのまま返信として渡す。
             answer = folder_agent.resume_after_text(CACHE_DB, session_id, question)
+            log(f"🛠 folder_agent: text_reply再開 → {str(answer)[:80]}")
             return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
         elif _stripped in ("承認", "はい", "OK", "ok", "Ok", "yes", "YES", "適用", "適用して", "実行"):
             answer = folder_agent.resume_after_command(CACHE_DB, session_id, approved=True)
+            log(f"🛠 folder_agent: 承認 → {str(answer)[:80]}")
             return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
         elif _stripped in ("キャンセル", "却下", "いいえ", "中止", "no", "NO"):
             answer = folder_agent.resume_after_command(CACHE_DB, session_id, approved=False)
+            log(f"🛠 folder_agent: キャンセル → {str(answer)[:80]}")
             return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
+        else:
+            log(f"⚠️ folder_agent: 承認待ち中だが「承認/キャンセル」以外の返信のためスルー: {question[:50]}")
 
     # ── フォルダエージェント: 「#<フォルダ>: <タスク>」で新規起動 ──
     if question.startswith("#"):
@@ -1453,8 +1459,11 @@ def chat(question, session_id="default"):
                     "model": "system", "source": "system"}
         _target_folder, _err = folder_agent.resolve_target_folder(_folder_raw)
         if _err:
+            log(f"❌ folder_agent: フォルダ検証エラー: {_err}")
             return {"answer": f"❌ {_err}", "model": "system", "source": "error"}
+        log(f"🛠 folder_agent: タスク開始 folder={_target_folder} task={_task.strip()[:50]}")
         answer = folder_agent.start_task(CACHE_DB, session_id, _target_folder, _task.strip())
+        log(f"🛠 folder_agent: 応答 → {str(answer)[:80]}")
         return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
 
     # プレフィックス判定
