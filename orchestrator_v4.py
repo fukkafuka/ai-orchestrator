@@ -1425,11 +1425,16 @@ def chat(question, session_id="default"):
             auto_patch.delete_pending_patch(CACHE_DB, session_id)
             return {"answer": f"❌ 修正案（{_pending['filename']}）をキャンセルしました。", "model": "system", "source": "system"}
 
-    # ── フォルダエージェント: コマンド/commit承認待ちチェック ──
+    # ── フォルダエージェント: コマンド/commit承認待ち・平文返信待ちチェック ──
     _agent_pending = folder_agent.get_agent_session(CACHE_DB, session_id)
     if _agent_pending and _agent_pending.get("waiting_for"):
+        _waiting_for = _agent_pending["waiting_for"]
         _stripped = question.strip()
-        if _stripped in ("承認", "はい", "OK", "ok", "Ok", "yes", "YES", "適用", "適用して", "実行"):
+        if _waiting_for == "text_reply":
+            # モデルが平文で質問・確認をしてきた状態。内容を問わずそのまま返信として渡す。
+            answer = folder_agent.resume_after_text(CACHE_DB, session_id, question)
+            return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
+        elif _stripped in ("承認", "はい", "OK", "ok", "Ok", "yes", "YES", "適用", "適用して", "実行"):
             answer = folder_agent.resume_after_command(CACHE_DB, session_id, approved=True)
             return {"answer": answer, "model": "folder_agent", "source": "folder_agent"}
         elif _stripped in ("キャンセル", "却下", "いいえ", "中止", "no", "NO"):

@@ -307,9 +307,13 @@ SYSTEM_PROMPT_TEMPLATE = """あなたはローカルのgitリポジトリで作�
 - write_file でファイルの作成・編集ができます(即座に反映されます)
 - run_command は診断・テスト用のコマンドを"提案"するものです。人間の承認を経てから実行され、
   結果があなたに返されます。使いすぎず、本当に必要な時だけ提案してください
-- 作業がまとまったら git_commit でコミットを提案してください(これも人間の承認が必要です)
+- ファイルの変更が完了したら、必ず git_commit ツールを呼んでコミットを提案してください
+  (これも人間の承認が必要です)。「コミットしますか？」のようにプレーンテキストで
+  質問するのではなく、必ずgit_commitツール自体を呼び出してください
 - タスクが完了した、またはこれ以上進められないと判断したら finish_task を呼んで終了してください
 - 対象フォルダの外のファイルは扱えません
+- 判断に迷う場合でも、プレーンテキストで質問するより先に、可能な範囲でツールを使って
+  進めてください。本当にユーザーの判断が必要な場合のみプレーンテキストで質問してください
 """
 
 
@@ -354,8 +358,11 @@ def run_loop(db_path, session_id, target_folder, task, messages, step_count):
 
         tool_calls = assistant_msg.get("tool_calls")
         if not tool_calls:
-            # ツールを呼ばずテキストで返してきた場合はそのまま終了扱いにする
-            delete_agent_session(db_path, session_id)
+            # ツールを呼ばずテキストで返してきた場合(質問・確認等)。
+            # セッションは削除せず、ユーザーの次の返信を待って再開できるようにする。
+            messages.append({"role": "assistant", "content": assistant_msg.get("content") or ""})
+            save_agent_session(db_path, session_id, target_folder, task, messages, step_count,
+                                waiting_for="text_reply", proposed_value=None)
             content = assistant_msg.get("content") or "(応答なし)"
             return f"🤖 {content}"
 
@@ -416,6 +423,19 @@ def start_task(db_path, session_id, target_folder, task):
         {"role": "user", "content": task},
     ]
     return run_loop(db_path, session_id, target_folder, task, messages, step_count=0)
+
+
+def resume_after_text(db_path, session_id, user_reply):
+    """モデルが平文で質問/確認をしてきた後、ユーザーからの自由な返信でループを再開する"""
+    session = get_agent_session(db_path, session_id)
+    if not session:
+        return None
+    messages = session["messages"]
+    target_folder = session["target_folder"]
+    task = session["task"]
+    step_count = session["step_count"]
+    messages.append({"role": "user", "content": user_reply})
+    return run_loop(db_path, session_id, target_folder, task, messages, step_count)
 
 
 def resume_after_command(db_path, session_id, approved):
