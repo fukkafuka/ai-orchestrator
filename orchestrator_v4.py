@@ -1715,7 +1715,7 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
     <button onclick="clearAllSessions()" style="background:#3a1a1a;color:#e94560;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">🗑️ 全セッション削除</button>
   </div>
 </div>
-<div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/captcha/stats" style="color:#4caf50" target="_blank">🧩 CAPTCHA</a> ｜ <a href="/dreaming/stats" style="color:#9c27b0" target="_blank">🌙 Dreaming</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ MythoFable</a></div>
+<div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/moltbook/stats" style="color:#fa0" target="_blank">🦞🌙 Moltbookダッシュボード</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ MythoFable</a></div>
 <div id="chat"></div>
 <div id="input-area">
   <label id="img-btn" title="画像・ファイルを添付" style="cursor:pointer;background:#1a3a5c;border:none;border-radius:50%;width:44px;height:44px;color:#4caf50;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">📎<input type="file" id="img-input" accept="image/*,.log,.txt,.py,.js,.ts,.json,.md,.sh,.yaml,.yml,.csv,.html,.css,.xml,.conf,.ini,.env" style="display:none" onchange="previewFile(this)"></label>
@@ -2275,115 +2275,8 @@ a.back { display: inline-block; margin-top: 20px; color: #4caf50; text-decoratio
 
 @app.route('/dreaming/stats', methods=['GET'])
 def dreaming_stats():
-    if not check_web_auth():
-        return redirect('/login')
-    import json as _json, os
-    memory_path = os.path.expanduser("~/ai-agent/moltbook/memory.json")
-    try:
-        m = _json.load(open(memory_path))
-    except Exception:
-        return jsonify({"error": "memory.json not found"})
-
-    style_notes = m.get("style_notes", "データなし")
-    avoid_topics = m.get("avoid_topics", [])
-    last_insights = m.get("last_insights", m.get("insights", "データなし"))
-    last_dream = m.get("last_dream", "不明")
-    karma_history = m.get("karma_history", [])
-    karma_up_triggers = m.get("karma_up_triggers", [])
-    commented_topics = m.get("commented_topics", [])[-10:]
-    karma_labels = [k["time"][-5:] for k in karma_history[-24:]]
-    karma_values = [k["karma"] for k in karma_history[-24:]]
-
-    avoid_html = "".join('<span class="tag">' + t + '</span>' for t in avoid_topics) if avoid_topics else "<p>なし</p>"
-    
-    if karma_values and len(karma_values) > 1:
-        min_k = min(karma_values)
-        max_k = max(karma_values)
-        _c_low = (106, 27, 154)   # 低い値: 落ち着いた紫
-        _c_high = (255, 64, 129)  # 高い値: 鮮やかなピンク
-        karma_bar_html = ""
-        for k, l in zip(karma_values, karma_labels):
-            ratio = (k - min_k) / (max_k - min_k + 1)
-            h = int(ratio * 70) + 10
-            _rgb = tuple(int(_c_low[i] + (_c_high[i] - _c_low[i]) * ratio) for i in range(3))
-            bar_color = 'rgb(' + str(_rgb[0]) + ',' + str(_rgb[1]) + ',' + str(_rgb[2]) + ')'
-            karma_bar_html += '<div style="flex:0 0 32px;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-karma="' + str(k) + '" data-time="' + l + '" onclick="showKarmaTip(event,this)"></div><div class="karma-label">' + l + '</div></div>'
-    else:
-        karma_bar_html = "データなし"
-
-    trigger_html = "".join('<div class="trigger">+' + str(t["karma_after"] - t["karma_before"]) + 'pt | ' + t["time"] + ' | ' + t.get("last_topic", "")[:40] + '</div>' for t in karma_up_triggers[-5:]) if karma_up_triggers else "<div class=\'card\'><p>データなし</p></div>"
-    topic_html = "".join('<div class="topic">' + t["time"] + ' | ' + t["title"][:50] + '</div>' for t in reversed(commented_topics)) if commented_topics else "<div class=\'card\'><p>データなし</p></div>"
-
-    html = """<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🌙 Dreaming Stats</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
-h1 { font-size: 22px; margin-bottom: 20px; color: #9c27b0; }
-h2 { font-size: 16px; margin: 20px 0 10px; color: #aaa; }
-.card { background: #16213e; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
-.card p { font-size: 14px; line-height: 1.6; color: #ddd; }
-.tag { display: inline-block; background: #0f3460; border-radius: 8px; padding: 4px 10px; margin: 4px; font-size: 12px; }
-.karma-bar { display: flex; align-items: flex-end; gap: 6px; margin-top: 10px; padding-top: 24px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }
-.karma-col { flex: none; width: 100%; background: #9c27b0; border-radius: 4px 4px 0 0; min-height: 4px; position: relative; cursor: pointer; }
-.karma-label { font-size: 11px; color: #ccc; text-align: center; margin-top: 4px; font-weight: 500; }
-.karma-tip { position: fixed; background: #333; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; white-space: nowrap; z-index: 100; display: none; pointer-events: none; transform: translateX(-50%); }
-.topic { background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 13px; color: #ccc; }
-.trigger { background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 12px; color: #4caf50; }
-a { color: #9c27b0; text-decoration: none; display: inline-block; margin-top: 20px; }
-.last-dream { font-size: 12px; color: #888; margin-bottom: 16px; }
-</style>
-</head>
-<body>
-<h1>🌙 Dreaming ダッシュボード</h1>
-""" + '<div class="last-dream">最終dreaming: ' + last_dream + '</div>' + """
-<h2>⬆️ Karmaトレンド（直近24件）</h2>
-<div class="card"><div class="karma-bar">""" + karma_bar_html + """</div></div>
-<h2>🎯 Karma上昇トリガー（直近5件）</h2>
-""" + trigger_html + """
-<h2>💬 最近コメントしたトピック</h2>
-""" + topic_html + """
-<h2>📝 スタイルメモ</h2>
-<div class="card"><p>""" + style_notes + """</p></div>
-<h2>💡 最新インサイト</h2>
-<div class="card"><p>""" + last_insights + """</p></div>
-<h2>🚫 避けるトピック</h2>
-<div class="card">""" + avoid_html + """</div>
-<a href="/">← チャットに戻る</a>
-<div class="karma-tip" id="karma-tip"></div>
-<script>
-function showKarmaTip(ev, el) {
-  ev.stopPropagation();
-  const tip = document.getElementById('karma-tip');
-  const key = el.dataset.karma + '_' + el.dataset.time;
-  if (tip.dataset.for === key && tip.style.display === 'block') {
-    tip.style.display = 'none';
-    return;
-  }
-  const rect = el.getBoundingClientRect();
-  tip.textContent = 'karma: ' + el.dataset.karma + '（' + el.dataset.time + '）';
-  tip.style.display = 'block';
-  tip.style.left = '0px';
-  const tipW = tip.offsetWidth;
-  const margin = 6;
-  let center = rect.left + rect.width / 2;
-  const half = tipW / 2;
-  center = Math.min(Math.max(center, half + margin), window.innerWidth - half - margin);
-  tip.style.left = center + 'px';
-  tip.style.top = Math.max(4, rect.top - 28) + 'px';
-  tip.dataset.for = key;
-}
-document.addEventListener('click', function() {
-  document.getElementById('karma-tip').style.display = 'none';
-});
-</script>
-</body>
-</html>"""
-    return html
+    # 統合ダッシュボード(/moltbook/stats)へのリダイレクト。旧リンクを踏んだ場合の互換用に残す。
+    return redirect('/moltbook/stats')
 
 def _render_combined_trend(dates, fails, totals, fail_patterns, fixed, fix_patterns, pat_colors, errors=None):
     if not dates:
@@ -2612,6 +2505,11 @@ def _render_fail_patterns(fail_patterns):
 
 @app.route('/captcha/stats', methods=['GET'])
 def captcha_stats():
+    # 統合ダッシュボード(/moltbook/stats)へのリダイレクト。旧リンクを踏んだ場合の互換用に残す。
+    return redirect('/moltbook/stats')
+
+@app.route('/moltbook/stats', methods=['GET'])
+def moltbook_dashboard():
     if not check_web_auth():
         return redirect('/login')
     import json, os
@@ -2621,6 +2519,38 @@ def captcha_stats():
     except Exception:
         return jsonify({"error": "memory.json not found"})
 
+    # ── Dreaming側データ ──
+    style_notes = m.get("style_notes", "データなし")
+    avoid_topics = m.get("avoid_topics", [])
+    last_insights = m.get("last_insights", m.get("insights", "データなし"))
+    last_dream = m.get("last_dream", "不明")
+    karma_history = m.get("karma_history", [])
+    karma_up_triggers = m.get("karma_up_triggers", [])
+    commented_topics = m.get("commented_topics", [])[-10:]
+    karma_labels = [k["time"][-5:] for k in karma_history[-24:]]
+    karma_values = [k["karma"] for k in karma_history[-24:]]
+
+    avoid_html = "".join('<span class="tag">' + t + '</span>' for t in avoid_topics) if avoid_topics else "<p>なし</p>"
+
+    if karma_values and len(karma_values) > 1:
+        min_k = min(karma_values)
+        max_k = max(karma_values)
+        _c_low = (106, 27, 154)   # 低い値: 落ち着いた紫
+        _c_high = (255, 64, 129)  # 高い値: 鮮やかなピンク
+        karma_bar_html = ""
+        for k, l in zip(karma_values, karma_labels):
+            ratio = (k - min_k) / (max_k - min_k + 1)
+            h = int(ratio * 70) + 10
+            _rgb = tuple(int(_c_low[i] + (_c_high[i] - _c_low[i]) * ratio) for i in range(3))
+            bar_color = 'rgb(' + str(_rgb[0]) + ',' + str(_rgb[1]) + ',' + str(_rgb[2]) + ')'
+            karma_bar_html += '<div style="flex:0 0 32px;display:flex;flex-direction:column;align-items:center"><div class="karma-col" style="height:' + str(h) + 'px;background:' + bar_color + '" data-karma="' + str(k) + '" data-time="' + l + '" onclick="showKarmaTip(event,this)"></div><div class="karma-label">' + l + '</div></div>'
+    else:
+        karma_bar_html = "データなし"
+
+    trigger_html = "".join('<div class="trigger">+' + str(t["karma_after"] - t["karma_before"]) + 'pt | ' + t["time"] + ' | ' + t.get("last_topic", "")[:40] + '</div>' for t in karma_up_triggers[-5:]) if karma_up_triggers else "<div class=\'card\'><p>データなし</p></div>"
+    topic_html = "".join('<div class="topic">' + t["time"] + ' | ' + t["title"][:50] + '</div>' for t in reversed(commented_topics)) if commented_topics else "<div class=\'card\'><p>データなし</p></div>"
+
+    # ── CAPTCHA側データ ──
     total_old = m.get("successful_comments", 0) + m.get("failed_challenges", 0)
     stats = m.get("captcha_stats", {})
     total = stats.get("total", total_old)
@@ -2631,23 +2561,20 @@ def captcha_stats():
     karma = m.get("karma_history", [])
     latest_karma = karma[-1]["karma"] if karma else 0
 
-    # 最終更新時刻（captcha_historyの最新エントリ）
     last_captcha_update = "データなし"
     _ch_for_time = m.get("captcha_history", [])
     if _ch_for_time:
         last_captcha_update = _ch_for_time[-1].get("time", "データなし")
 
-    # captcha_history を日別に集計（直近10日）
     from collections import defaultdict as _dd
     captcha_history = m.get("captcha_history", [])
     daily = _dd(lambda: {"total": 0, "fail": 0, "patterns": []})
     def _extract_mmdd(_t):
-        # 新フォーマット "YYYY-MM-DD HH:MM" と旧フォーマット "MM-DD HH:MM" の両対応
         if not _t:
             return ""
         if len(_t) >= 10 and _t[4] == "-":
-            return _t[5:10]  # "YYYY-MM-DD ..." -> "MM-DD"
-        return _t[:5]  # "MM-DD ..." -> "MM-DD"
+            return _t[5:10]
+        return _t[:5]
 
     for entry in captcha_history:
         date = _extract_mmdd(entry.get("time", ""))
@@ -2662,7 +2589,6 @@ def captcha_stats():
     chart_totals = [daily[d]["total"] for d in chart_dates]
     chart_patterns = [daily[d]["patterns"] for d in chart_dates]
 
-    # doctor_fix_history を同じ日付軸で日別集計（パターン内訳も収集）
     doctor_fix_history = m.get("doctor_fix_history", [])
     daily_fix = _dd(lambda: {"count": 0, "patterns": []})
     for entry in doctor_fix_history:
@@ -2673,7 +2599,6 @@ def captcha_stats():
     chart_fixed = [daily_fix[d]["count"] if d in daily_fix else 0 for d in chart_dates]
     chart_fixed_patterns = [daily_fix[d]["patterns"] if d in daily_fix else [] for d in chart_dates]
 
-    # doctor_errors を同じ日付軸で日別集計（クラッシュ等で記録できなかった日を区別するため）
     doctor_errors = m.get("doctor_errors", [])
     daily_errors = _dd(int)
     for entry in doctor_errors:
@@ -2682,7 +2607,6 @@ def captcha_stats():
             daily_errors[date] += 1
     chart_errors = [daily_errors.get(d, 0) for d in chart_dates]
 
-    # 手動修正済み履歴（manual_fix_history）を同じ日付軸で日別集計
     manual_fix_history = m.get("manual_fix_history", [])
     daily_manual = _dd(lambda: {"count": 0, "patterns": []})
     for entry in manual_fix_history:
@@ -2693,7 +2617,6 @@ def captcha_stats():
     chart_manual_fixed = [daily_manual[d]["count"] if d in daily_manual else 0 for d in chart_dates]
     chart_manual_fixed_patterns = [daily_manual[d]["patterns"] if d in daily_manual else [] for d in chart_dates]
 
-    # 手動修正待ち一覧（unclassified_patterns.json）
     manual_pending_count = 0
     manual_pending_html = "<p style=\"color:#666;font-size:13px;\">データなし</p>"
     try:
@@ -2711,7 +2634,6 @@ def captcha_stats():
             manual_pending_html = f'<div class="card" style="max-height:320px;overflow-y:auto;">{_rows}</div>'
     except Exception:
         pass
-    # 失敗パターン累計と同じ色マッピングを生成
     _fp_colors = ["#e94560", "#ff9800", "#f06292", "#ba68c8", "#4db6ac", "#64b5f6"]
     _sorted_fp = sorted(fail_patterns.items(), key=lambda x: -x[1])
     pat_colors = {p: _fp_colors[i % len(_fp_colors)] for i, (p, _) in enumerate(_sorted_fp)}
@@ -2721,16 +2643,25 @@ def captcha_stats():
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🦞 CAPTCHA Stats</title>
+<title>🦞🌙 Moltbook ダッシュボード</title>
 <style>
 * {{ box-sizing: border-box; margin: 0; padding: 0; }}
 body {{ font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }}
-h1 {{ font-size: 22px; margin-bottom: 20px; color: #e94560; }}
+h1 {{ font-size: 22px; margin-bottom: 20px; color: #fa0; }}
 h2 {{ font-size: 16px; margin: 20px 0 10px; color: #aaa; }}
 .cards {{ display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }}
-.card {{ background: #16213e; border-radius: 12px; padding: 16px; min-width: 140px; flex: 1; }}
+.card {{ background: #16213e; border-radius: 12px; padding: 16px; margin-bottom: 12px; min-width: 140px; flex: 1; }}
+.card p {{ font-size: 14px; line-height: 1.6; color: #ddd; }}
 .card .num {{ font-size: 32px; font-weight: bold; color: #e94560; }}
 .card .label {{ font-size: 12px; color: #888; margin-top: 4px; }}
+.tag {{ display: inline-block; background: #0f3460; border-radius: 8px; padding: 4px 10px; margin: 4px; font-size: 12px; }}
+.karma-bar {{ display: flex; align-items: flex-end; gap: 6px; margin-top: 10px; padding-top: 24px; overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; }}
+.karma-col {{ flex: none; width: 100%; background: #9c27b0; border-radius: 4px 4px 0 0; min-height: 4px; position: relative; cursor: pointer; }}
+.karma-label {{ font-size: 11px; color: #ccc; text-align: center; margin-top: 4px; font-weight: 500; }}
+.karma-tip {{ position: fixed; background: #333; color: #fff; padding: 4px 10px; border-radius: 4px; font-size: 11px; white-space: nowrap; z-index: 100; display: none; pointer-events: none; transform: translateX(-50%); }}
+.topic {{ background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 13px; color: #ccc; }}
+.trigger {{ background: #16213e; border-radius: 8px; padding: 8px 12px; margin: 4px 0; font-size: 12px; color: #4caf50; }}
+.last-dream {{ font-size: 12px; color: #888; margin-bottom: 4px; }}
 .rate {{ font-size: 48px; font-weight: bold; color: {"#4caf50" if rate >= 80 else "#ff9800" if rate >= 60 else "#e94560"}; }}
 .bar-bg {{ background: #0f0f23; border-radius: 8px; height: 20px; margin: 10px 0; overflow: hidden; }}
 .bar-fill {{ height: 100%; background: {"#4caf50" if rate >= 80 else "#ff9800" if rate >= 60 else "#e94560"}; border-radius: 8px; width: {rate}%; transition: width 0.5s; }}
@@ -2749,12 +2680,17 @@ h2 {{ font-size: 16px; margin: 20px 0 10px; color: #aaa; }}
 .captcha-pair-bars .captcha-stack {{ flex: 1; }}
 .captcha-bar-legend {{ font-size: 11px; color: #888; margin-bottom: 6px; }}
 .last-update {{ font-size: 12px; color: #888; margin-bottom: 16px; }}
-a {{ color: #4caf50; text-decoration: none; display: inline-block; margin-top: 20px; }}
+a {{ color: #fa0; text-decoration: none; display: inline-block; margin-top: 20px; }}
 </style>
 </head>
 <body>
-<h1>🦞 CAPTCHA ダッシュボード</h1>
-<div class="last-update">最終更新: {last_captcha_update}</div>
+<h1>🦞🌙 Moltbook ダッシュボード</h1>
+<div class="last-dream">最終dreaming: {last_dream}</div>
+<div class="last-update">最終CAPTCHA更新: {last_captcha_update}</div>
+
+<h2>⬆️ Karmaトレンド（直近24件）</h2>
+<div class="card"><div class="karma-bar">{karma_bar_html}</div></div>
+
 <div class="cards">
   <div class="card"><div class="num">{total}</div><div class="label">総試行回数</div></div>
   <div class="card"><div class="num" style="color:#4caf50">{success}</div><div class="label">✅ 成功</div></div>
@@ -2773,7 +2709,46 @@ a {{ color: #4caf50; text-decoration: none; display: inline-block; margin-top: 2
 {_render_fix_trend(chart_dates, chart_manual_fixed, chart_manual_fixed_patterns, pat_colors)}
 <h2>失敗パターン（累計）</h2>
 {_render_fail_patterns(fail_patterns)}
+
+<h2>🎯 Karma上昇トリガー（直近5件）</h2>
+{trigger_html}
+<h2>💬 最近コメントしたトピック</h2>
+{topic_html}
+<h2>📝 スタイルメモ</h2>
+<div class="card"><p>{style_notes}</p></div>
+<h2>💡 最新インサイト</h2>
+<div class="card"><p>{last_insights}</p></div>
+<h2>🚫 避けるトピック</h2>
+<div class="card">{avoid_html}</div>
+
 <a href="/">← チャットに戻る</a>
+<div class="karma-tip" id="karma-tip"></div>
+<script>
+function showKarmaTip(ev, el) {{
+  ev.stopPropagation();
+  const tip = document.getElementById('karma-tip');
+  const key = el.dataset.karma + '_' + el.dataset.time;
+  if (tip.dataset.for === key && tip.style.display === 'block') {{
+    tip.style.display = 'none';
+    return;
+  }}
+  const rect = el.getBoundingClientRect();
+  tip.textContent = 'karma: ' + el.dataset.karma + '（' + el.dataset.time + '）';
+  tip.style.display = 'block';
+  tip.style.left = '0px';
+  const tipW = tip.offsetWidth;
+  const margin = 6;
+  let center = rect.left + rect.width / 2;
+  const half = tipW / 2;
+  center = Math.min(Math.max(center, half + margin), window.innerWidth - half - margin);
+  tip.style.left = center + 'px';
+  tip.style.top = Math.max(4, rect.top - 28) + 'px';
+  tip.dataset.for = key;
+}}
+document.addEventListener('click', function() {{
+  document.getElementById('karma-tip').style.display = 'none';
+}});
+</script>
 </body>
 </html>"""
     return html
