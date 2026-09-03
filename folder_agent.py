@@ -88,7 +88,7 @@ def save_agent_session(db_path, session_id, target_folder, task, messages, step_
     conn.close()
 
 
-def get_agent_session(db_path, session_id, timeout_seconds=1800):
+def get_agent_session(db_path, session_id, timeout_seconds=86400):
     _init_table(db_path)
     conn = sqlite3.connect(db_path)
     row = conn.execute(
