@@ -2751,7 +2751,9 @@ document.addEventListener('click', function() {{
 </script>
 </body>
 </html>"""
-    return html
+    resp = app.make_response(html)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 @app.route('/sessions', methods=['GET'])
 def list_sessions():
