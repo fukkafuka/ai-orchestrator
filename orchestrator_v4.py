@@ -101,6 +101,11 @@ DIAGNOSIS_LOG_MAP = {
         os.path.expanduser("~/Logs/watcher_stderr.log"),
         os.path.expanduser("~/Logs/dashboard_run.log"),
     ],
+    "securaguard": [
+        os.path.expanduser("~/Logs/watcher_stdout.log"),
+        os.path.expanduser("~/Logs/watcher_stderr.log"),
+        os.path.expanduser("~/Logs/dashboard_run.log"),
+    ],
     "セキュリティ": [
         os.path.expanduser("~/Logs/watcher_stdout.log"),
         os.path.expanduser("~/Logs/watcher_stderr.log"),
@@ -1015,9 +1020,10 @@ def _collect_diagnosis_logs(system_key):
 
 
 def _detect_diagnosis_system(instruction):
-    """指示文からDIAGNOSIS_LOG_MAPのキーに一致するシステム名を検出"""
+    """指示文からDIAGNOSIS_LOG_MAPのキーに一致するシステム名を検出(大文字小文字を区別しない)"""
+    lowered = instruction.lower()
     for key in DIAGNOSIS_LOG_MAP:
-        if key in instruction:
+        if key.lower() in lowered:
             return key
     return None
 
@@ -1715,7 +1721,7 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
     <button onclick="clearAllSessions()" style="background:#3a1a1a;color:#e94560;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">🗑️ 全セッション削除</button>
   </div>
 </div>
-<div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/moltbook/stats" style="color:#fa0" target="_blank">🦞🌙 Moltbookダッシュボード</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ MythoFable</a></div>
+<div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/moltbook/stats" style="color:#fa0" target="_blank">🦞🌙 Moltbookダッシュボード</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ SecureGuard</a></div>
 <div id="chat"></div>
 <div id="input-area">
   <label id="img-btn" title="画像・ファイルを添付" style="cursor:pointer;background:#1a3a5c;border:none;border-radius:50%;width:44px;height:44px;color:#4caf50;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">📎<input type="file" id="img-input" accept="image/*,.log,.txt,.py,.js,.ts,.json,.md,.sh,.yaml,.yml,.csv,.html,.css,.xml,.conf,.ini,.env" style="display:none" onchange="previewFile(this)"></label>
@@ -2241,7 +2247,7 @@ a.back { display: inline-block; margin-top: 20px; color: #4caf50; text-decoratio
 <tr><th>システム</th><th>ファイル</th></tr>
 <tr><td>オーケストレーター</td><td>orchestrator_v4.py</td></tr>
 <tr><td>Moltbook</td><td>agent_claude.py / agent_log_doctor.py</td></tr>
-<tr><td>MythoFable</td><td>dashboard.py / log_watcher.py / auto_patcher.py / auto_recovery.py / exit_node_monitor.py / ip_manager.py / mythofable_s.py / proxy_watcher.py</td></tr>
+<tr><td>SecureGuard</td><td>dashboard.py / log_watcher.py / auto_patcher.py / auto_recovery.py / exit_node_monitor.py / ip_manager.py / mythofable_s.py / proxy_watcher.py</td></tr>
 </table>
 
 <h3 style="font-size:13px;color:#9c27b0;margin:14px 0 6px;">🩻 診断モード（ログから自動で問題特定）</h3>
@@ -2252,7 +2258,7 @@ a.back { display: inline-block; margin-top: 20px; color: #4caf50; text-decoratio
 <tr><td>moltbook / エージェント</td><td>agent_claude.log</td></tr>
 <tr><td>mythofable / セキュリティ</td><td>watcher/dashboardのログ</td></tr>
 </table>
-<p class="note" style="margin-top:8px;">💡 例：「moltbookのログを確認して対応して」「MythoFableのログを確認して対応して」</p>
+<p class="note" style="margin-top:8px;">💡 例：「moltbookのログを確認して対応して」「SecureGuardのログを確認して対応して」</p>
 
 <h2>🔑 セッションと会話の引き継ぎ</h2>
 <table>
