@@ -47,7 +47,7 @@ restart_service() {
     else
         log "[CRITICAL] 再起動後も応答なし: $SERVICE — 手動確認が必要です"
         # Mac通知（オプション）
-        osascript -e 'display notification "orchestrator が応答しません。手動確認してください。" with title "MythoFable Alert" sound name "Basso"' 2>/dev/null
+        osascript -e 'display notification "orchestrator が応答しません。手動確認してください。" with title "SecureGuard Alert" sound name "Basso"' 2>/dev/null
     fi
 }
 
