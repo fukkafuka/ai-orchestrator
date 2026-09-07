@@ -1461,7 +1461,7 @@ def chat(question, session_id="default"):
         elif "：" in _body:
             _folder_raw, _task = _body.split("：", 1)
         else:
-            return {"answer": "形式は「#<フォルダパス>: <やってほしいこと>」です。例: #ai-orchestrator: READMEに一文追加して",
+            return {"answer": "形式は「#<フォルダパスまたは登録名>: <やってほしいこと>」です。例: #orchestrator: READMEに一文追加して",
                     "model": "system", "source": "system"}
         _target_folder, _err = folder_agent.resolve_target_folder(_folder_raw)
         if _err:

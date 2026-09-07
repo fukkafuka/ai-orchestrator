@@ -128,10 +128,26 @@ def delete_agent_session(db_path, session_id):
 
 # ── 安全性チェック ──────────────────────────────────────
 
+FOLDER_ALIASES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "folder_aliases.json")
+
+
+def load_folder_aliases():
+    try:
+        with open(FOLDER_ALIASES_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 def resolve_target_folder(raw_path):
     """フォルダパスを正規化して存在確認・gitリポジトリ確認を行う。
+    事前登録されたエイリアス(folder_aliases.json)に一致すればそのパスを使う。
     問題なければ絶対パスを、問題があればエラーメッセージを返す。
     """
+    key = raw_path.strip()
+    aliases = load_folder_aliases()
+    raw_path = aliases.get(key, aliases.get(key.lower(), key))
+
     path = os.path.expanduser(raw_path.strip())
     if not os.path.isabs(path):
         path = os.path.expanduser(os.path.join("~", path))
