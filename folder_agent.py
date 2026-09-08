@@ -139,6 +139,11 @@ def load_folder_aliases():
         return {}
 
 
+def save_folder_aliases(aliases):
+    with open(FOLDER_ALIASES_PATH, "w", encoding="utf-8") as f:
+        json.dump(aliases, f, ensure_ascii=False, indent=2)
+
+
 def resolve_target_folder(raw_path):
     """フォルダパスを正規化して存在確認・gitリポジトリ確認を行う。
     事前登録されたエイリアス(folder_aliases.json)に一致すればそのパスを使う。

@@ -1721,7 +1721,7 @@ header { background: #16213e; padding: 12px 16px; font-size: 18px; font-weight: 
     <button onclick="clearAllSessions()" style="background:#3a1a1a;color:#e94560;border:none;padding:4px 10px;border-radius:6px;font-size:11px;cursor:pointer;">🗑️ 全セッション削除</button>
   </div>
 </div>
-<div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/moltbook/stats" style="color:#fa0" target="_blank">🦞🌙 Moltbookダッシュボード</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ SecureGuard</a></div>
+<div class="hint">💡 <strong>。</strong>クラウド ｜ <strong>。。。</strong>マルチエージェント ｜ <strong>#</strong>フォルダ操作 ｜ <a href="/folder_aliases" style="color:#fa0" target="_blank">📁 プロジェクト管理</a> ｜ <a href="https://www.moltbook.com/u/fujikatsu-openclaw" target="_blank" style="color:#fa0;">🦞 Moltbook</a> ｜ <a href="/moltbook/stats" style="color:#fa0" target="_blank">🦞🌙 Moltbookダッシュボード</a> ｜ <a href="https://hz-k-2mba14.tailb82610.ts.net:5000/rescue" target="_blank" style="color:#f44;">🛡️ SecureGuard</a></div>
 <div id="chat"></div>
 <div id="input-area">
   <label id="img-btn" title="画像・ファイルを添付" style="cursor:pointer;background:#1a3a5c;border:none;border-radius:50%;width:44px;height:44px;color:#4caf50;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0;">📎<input type="file" id="img-input" accept="image/*,.log,.txt,.py,.js,.ts,.json,.md,.sh,.yaml,.yml,.csv,.html,.css,.xml,.conf,.ini,.env" style="display:none" onchange="previewFile(this)"></label>
@@ -2760,6 +2760,89 @@ document.addEventListener('click', function() {{
     resp = app.make_response(html)
     resp.headers["Cache-Control"] = "no-store"
     return resp
+
+@app.route('/folder_aliases', methods=['GET'])
+def folder_aliases_page():
+    if not check_web_auth():
+        return redirect('/login')
+    import html as _html_mod
+    aliases = folder_agent.load_folder_aliases()
+    rows = "".join(
+        f'<tr><td>{_html_mod.escape(name)}</td><td>{_html_mod.escape(path)}</td>'
+        f'<td><form method="POST" action="/folder_aliases/delete" style="margin:0;" '
+        f'onsubmit="return confirm(\'{_html_mod.escape(name)} を削除しますか？\');">'
+        f'<input type="hidden" name="name" value="{_html_mod.escape(name)}">'
+        f'<button type="submit" class="del-btn">削除</button></form></td></tr>'
+        for name, path in sorted(aliases.items())
+    ) or '<tr><td colspan="3">登録なし</td></tr>'
+
+    html = f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>📁 プロジェクト管理</title>
+<style>
+* {{ box-sizing: border-box; margin: 0; padding: 0; }}
+body {{ font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }}
+h1 {{ font-size: 22px; margin-bottom: 20px; color: #fa0; }}
+h2 {{ font-size: 16px; margin: 20px 0 10px; color: #aaa; }}
+table {{ width: 100%; border-collapse: collapse; background: #16213e; border-radius: 12px; overflow: hidden; }}
+td {{ padding: 12px; border-bottom: 1px solid #0f3460; font-size: 14px; }}
+tr:last-child td {{ border-bottom: none; }}
+.del-btn {{ background: #e94560; color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }}
+.add-form {{ background: #16213e; border-radius: 12px; padding: 16px; margin-top: 20px; }}
+.add-form input {{ width: 100%; padding: 10px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #0f3460; background: #0f0f23; color: #eee; font-size: 14px; }}
+.add-form label {{ font-size: 12px; color: #888; display: block; margin-bottom: 4px; }}
+.add-btn {{ background: #4caf50; color: #fff; border: none; border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; width: 100%; }}
+a {{ color: #fa0; text-decoration: none; display: inline-block; margin-top: 20px; }}
+</style>
+</head>
+<body>
+<h1>📁 プロジェクト管理（フォルダエイリアス）</h1>
+<p style="font-size:13px;color:#888;margin-bottom:16px;">ここで登録した名前は、チャットで「#名前: やってほしいこと」の形式で使えます。</p>
+<table>
+<tr><td style="color:#888;font-size:12px;">名前</td><td style="color:#888;font-size:12px;">パス</td><td></td></tr>
+{rows}
+</table>
+<div class="add-form">
+<h2>新規登録・更新</h2>
+<form method="POST" action="/folder_aliases/add">
+<label>名前（例: myproject）</label>
+<input type="text" name="name" required>
+<label>パス（例: ~/projects/myproject）</label>
+<input type="text" name="path" required>
+<button type="submit" class="add-btn">保存</button>
+</form>
+</div>
+<a href="/">← チャットに戻る</a>
+</body>
+</html>"""
+    resp = app.make_response(html)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route('/folder_aliases/add', methods=['POST'])
+def folder_aliases_add():
+    if not check_web_auth():
+        return redirect('/login')
+    name = request.form.get("name", "").strip()
+    path = request.form.get("path", "").strip()
+    if name and path:
+        aliases = folder_agent.load_folder_aliases()
+        aliases[name] = path
+        folder_agent.save_folder_aliases(aliases)
+    return redirect('/folder_aliases')
+
+@app.route('/folder_aliases/delete', methods=['POST'])
+def folder_aliases_delete():
+    if not check_web_auth():
+        return redirect('/login')
+    name = request.form.get("name", "").strip()
+    aliases = folder_agent.load_folder_aliases()
+    aliases.pop(name, None)
+    folder_agent.save_folder_aliases(aliases)
+    return redirect('/folder_aliases')
 
 @app.route('/sessions', methods=['GET'])
 def list_sessions():
