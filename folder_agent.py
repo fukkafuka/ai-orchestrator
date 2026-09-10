@@ -144,6 +144,45 @@ def save_folder_aliases(aliases):
         json.dump(aliases, f, ensure_ascii=False, indent=2)
 
 
+_SCAN_EXCLUDE_DIRS = {
+    ".git", "node_modules", "__pycache__", ".venv", "venv", ".pytest_cache",
+    "Library", ".Trash", ".cache", ".npm", ".npm-global", ".cursor",
+    ".vscode", ".config", ".pyenv", "Applications", "Movies", "Music",
+    "Pictures", "Desktop",
+}
+
+
+def scan_git_repos(base_dir=None, max_depth=3, max_results=50):
+    """base_dir配下(デフォルトはホームディレクトリ)を指定した深さまで走査し、
+    .gitディレクトリを持つフォルダ(=gitリポジトリ)の絶対パス一覧を返す。
+    重い/無関係なディレクトリはスキップして高速化する。
+    """
+    base_dir = os.path.expanduser(base_dir or "~")
+    found = []
+
+    def _walk(path, depth):
+        if len(found) >= max_results or depth > max_depth:
+            return
+        try:
+            entries = os.listdir(path)
+        except Exception:
+            return
+        if ".git" in entries and os.path.isdir(os.path.join(path, ".git")):
+            found.append(path)
+            return  # リポジトリ内部(サブモジュール等)まで潜らない
+        for name in entries:
+            if name.startswith(".") or name in _SCAN_EXCLUDE_DIRS:
+                continue
+            full = os.path.join(path, name)
+            if os.path.isdir(full) and not os.path.islink(full):
+                _walk(full, depth + 1)
+                if len(found) >= max_results:
+                    return
+
+    _walk(base_dir, 0)
+    return sorted(found)
+
+
 def resolve_target_folder(raw_path):
     """フォルダパスを正規化して存在確認・gitリポジトリ確認を行う。
     事前登録されたエイリアス(folder_aliases.json)に一致すればそのパスを使う。
