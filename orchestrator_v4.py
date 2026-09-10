@@ -2766,6 +2766,7 @@ def folder_aliases_page():
     if not check_web_auth():
         return redirect('/login')
     import html as _html_mod
+    is_mac_local = request.remote_addr in ('127.0.0.1', '::1')
     aliases = folder_agent.load_folder_aliases()
     rows = "".join(
         f'<tr><td>{_html_mod.escape(name)}</td><td>{_html_mod.escape(path)}</td>'
@@ -2775,6 +2776,30 @@ def folder_aliases_page():
         f'<button type="submit" class="del-btn">削除</button></form></td></tr>'
         for name, path in sorted(aliases.items())
     ) or '<tr><td colspan="3">登録なし</td></tr>'
+
+    if is_mac_local:
+        scan_ui = (
+            '<button type="button" id="scan-btn" class="scan-btn" '
+            'onclick="scanRepos()">🔍 Macのリポジトリをスキャン</button>'
+            '<select id="scan-select" style="display:none;" '
+            'onchange="document.getElementById(\'path-input\').value=this.value;"></select>'
+            '<script>'
+            'async function scanRepos(){'
+            'const btn=document.getElementById("scan-btn");'
+            'btn.textContent="検索中...";'
+            'const res=await fetch("/folder_aliases/scan");'
+            'const data=await res.json();'
+            'const sel=document.getElementById("scan-select");'
+            'if(data.error){alert(data.error);btn.textContent="🔍 Macのリポジトリをスキャン";return;}'
+            'sel.innerHTML="<option value=\'\'>-- 選択してください --</option>"+'
+            'data.repos.map(r=>`<option value="${r}">${r}</option>`).join("");'
+            'sel.style.display="block";'
+            'btn.style.display="none";'
+            '}'
+            '</script>'
+        )
+    else:
+        scan_ui = ""
 
     html = f"""<!DOCTYPE html>
 <html lang="ja">
@@ -2792,9 +2817,10 @@ td {{ padding: 12px; border-bottom: 1px solid #0f3460; font-size: 14px; }}
 tr:last-child td {{ border-bottom: none; }}
 .del-btn {{ background: #e94560; color: #fff; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; }}
 .add-form {{ background: #16213e; border-radius: 12px; padding: 16px; margin-top: 20px; }}
-.add-form input {{ width: 100%; padding: 10px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #0f3460; background: #0f0f23; color: #eee; font-size: 14px; }}
+.add-form input, .add-form select {{ width: 100%; padding: 10px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #0f3460; background: #0f0f23; color: #eee; font-size: 14px; }}
 .add-form label {{ font-size: 12px; color: #888; display: block; margin-bottom: 4px; }}
 .add-btn {{ background: #4caf50; color: #fff; border: none; border-radius: 8px; padding: 10px 20px; font-size: 14px; cursor: pointer; width: 100%; }}
+.scan-btn {{ background: #0f3460; color: #fa0; border: 1px solid #fa0; border-radius: 8px; padding: 10px 20px; font-size: 13px; cursor: pointer; width: 100%; margin-bottom: 10px; }}
 a {{ color: #fa0; text-decoration: none; display: inline-block; margin-top: 20px; }}
 </style>
 </head>
@@ -2811,7 +2837,8 @@ a {{ color: #fa0; text-decoration: none; display: inline-block; margin-top: 20px
 <label>名前（例: myproject）</label>
 <input type="text" name="name" required>
 <label>パス（例: ~/projects/myproject）</label>
-<input type="text" name="path" required>
+{scan_ui}
+<input type="text" name="path" id="path-input" required>
 <button type="submit" class="add-btn">保存</button>
 </form>
 </div>
@@ -2843,6 +2870,15 @@ def folder_aliases_delete():
     aliases.pop(name, None)
     folder_agent.save_folder_aliases(aliases)
     return redirect('/folder_aliases')
+
+@app.route('/folder_aliases/scan', methods=['GET'])
+def folder_aliases_scan():
+    if not check_web_auth():
+        return jsonify({"error": "unauthorized"}), 401
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        return jsonify({"error": "この機能はMac本体からのみ利用できます"}), 403
+    repos = folder_agent.scan_git_repos()
+    return jsonify({"repos": repos})
 
 @app.route('/sessions', methods=['GET'])
 def list_sessions():
