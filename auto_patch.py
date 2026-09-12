@@ -43,10 +43,73 @@ old_strはファイル内で一意に一箇所だけに一致する、十分な�
 - 出力の最後の1文字は必ず "}" にすること
 """
 
+# ── 大きいファイル向け: 関連箇所のみ抜粋 ──────────────────────
+EXCERPT_SIZE_THRESHOLD = 6000   # この文字数を超えるファイルのみ抜粋を試みる
+EXCERPT_CONTEXT_LINES = 15      # 該当関数/クラスの前後に含める行数
+
+def extract_relevant_excerpt(file_content: str, instruction: str, context_lines: int = EXCERPT_CONTEXT_LINES) -> str:
+    """
+    大きいファイルの場合、修正指示(instruction)に含まれる関数名/クラス名をASTで検索し、
+    該当箇所とその前後のみを抜粋してLLMに渡すプロンプトサイズを抑える。
+    以下の場合は安全側に倒してfile_contentをそのまま返す(従来通りフル送信):
+    - ファイルサイズがEXCERPT_SIZE_THRESHOLD以下
+    - 構文解析できない
+    - instructionに該当する関数/クラス名が見つからない
+    """
+    if len(file_content) <= EXCERPT_SIZE_THRESHOLD:
+        return file_content
+
+    try:
+        tree = ast.parse(file_content)
+    except SyntaxError:
+        return file_content
+
+    lines = file_content.splitlines(keepends=True)
+    candidates = [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and node.name and node.name in instruction
+    ]
+    if not candidates:
+        return file_content
+
+    ranges = []
+    for node in candidates:
+        end_lineno = getattr(node, "end_lineno", node.lineno)
+        start = max(node.lineno - 1 - context_lines, 0)
+        end = min(end_lineno + context_lines, len(lines))
+        ranges.append((start, end))
+    ranges.sort()
+
+    merged = []
+    for s, e in ranges:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+
+    parts = []
+    prev_end = 0
+    for s, e in merged:
+        if s > prev_end:
+            parts.append(f"\n# ...(中略: {prev_end + 1}〜{s}行目省略)...\n")
+        parts.append("".join(lines[s:e]))
+        prev_end = e
+    if prev_end < len(lines):
+        parts.append(f"\n# ...(中略: {prev_end + 1}〜{len(lines)}行目省略)...\n")
+
+    header = (
+        f"# ⚠️ 全{len(lines)}行のうち、修正指示に関連する箇所のみ抜粋しています。\n"
+        f"# old_strは必ずこの抜粋範囲内の文字列から選ぶこと(抜粋箇所は元ファイルの完全な一致コピーです)。\n\n"
+    )
+    return header + "".join(parts)
+
+
 def build_patch_prompt(file_content: str, instruction: str) -> list:
+    excerpt = extract_relevant_excerpt(file_content, instruction)
     return [
         {"role": "system", "content": PATCH_SYSTEM_PROMPT},
-        {"role": "user", "content": f"### 対象ファイル内容\n{file_content}\n\n### 修正指示\n{instruction}"}
+        {"role": "user", "content": f"### 対象ファイル内容\n{excerpt}\n\n### 修正指示\n{instruction}"}
     ]
 
 def extract_json_object(text):

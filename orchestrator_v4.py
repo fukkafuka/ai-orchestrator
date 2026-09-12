@@ -1121,9 +1121,10 @@ def _refine_patch_instruction(target_filename, original_instruction, last_instru
             file_content = f.read()
     except Exception:
         file_content = ""
+    excerpt = auto_patch.extract_relevant_excerpt(file_content, original_instruction)[:4000]
     messages = [
         {"role": "system", "content": REFINE_INSTRUCTION_SYSTEM_PROMPT},
-        {"role": "user", "content": f"### 対象ファイル(先頭4000文字)\n{file_content[:4000]}\n\n### 元の修正指示\n{original_instruction}\n\n### 直前の指示\n{last_instruction}\n\n### 失敗理由\n{error_text[:2000]}"}
+        {"role": "user", "content": f"### 対象ファイル(関連抜粋・最大4000文字)\n{excerpt}\n\n### 元の修正指示\n{original_instruction}\n\n### 直前の指示\n{last_instruction}\n\n### 失敗理由\n{error_text[:2000]}"}
     ]
     def _extract_japanese_instruction(raw):
         """思考過程混入対策: 日本語(ひらがな/カタカナ/漢字)を含む行のみを抽出して結合する。
