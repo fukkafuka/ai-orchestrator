@@ -15,6 +15,7 @@ import subprocess
 import time
 import json
 import sqlite3
+import concurrent.futures
 import numpy as np
 from datetime import datetime
 from flask import Flask, request, jsonify, render_template_string, redirect
@@ -426,37 +427,56 @@ def call_openrouter(model, messages, max_tokens=1000, temperature=0.7):
 
 
 
-def call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3, response_format=None):
+_OPENROUTER_SINGLE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="openrouter_single")
+
+def call_openrouter_single(model, messages, max_tokens=1000, temperature=0.3, response_format=None, timeout=45):
     """自動フォールバックなし・単発モデル呼び出し（パッチ生成の多モデル試行用）
     response_format="json_object" を指定すると、対応モデルでJSONオブジェクト出力を強制する。
-    自由文(精密化指示など)を期待する呼び出しでは指定しないこと。"""
-    _payload = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "reasoning": {"exclude": True},
-    }
-    if response_format == "json_object":
-        _payload["response_format"] = {"type": "json_object"}
-    r = requests.post(
-        OPENROUTER_BASE,
-        headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "http://localhost:11437",
-            "X-Title": "Orchestrator v4"
-        },
-        json=_payload,
-        timeout=45
-    )
-    data = r.json()
-    if "choices" not in data:
-        raise Exception(data.get("error", {}).get("message", str(data)))
-    content = data["choices"][0]["message"]["content"] or ""
-    if not content.strip():
-        raise Exception("空応答")
-    return content
+    自由文(精密化指示など)を期待する呼び出しでは指定しないこと。
+
+    注意: requests側のtimeoutは「接続確立」「各read呼び出し」単位のタイムアウトであり、
+    リクエスト全体の総所要時間を制限しない。OpenRouterは生成中に接続を維持するため
+    細切れでデータを送ってくることがあり、無料枠モデルが長い思考過程を出力し続けると
+    個々のread自体はtimeout秒以内に収まり続けて全体では60〜130秒超かかることがある
+    (実測で確認済み)。そのためThreadPoolExecutor+future.result(timeout=...)で
+    呼び出し全体に本当の意味での壁時計タイムアウトをかけ、フォールバックループが
+    確実にtimeout秒で次の候補モデルに進めるようにする。
+    (バックグラウンドスレッド自体は完全には中断できず、requests側のtimeoutが
+    効くまでは裏で動き続けるが、結果は破棄されるため呼び出し元には影響しない)"""
+    def _do_request():
+        _payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "reasoning": {"exclude": True},
+        }
+        if response_format == "json_object":
+            _payload["response_format"] = {"type": "json_object"}
+        r = requests.post(
+            OPENROUTER_BASE,
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "http://localhost:11437",
+                "X-Title": "Orchestrator v4"
+            },
+            json=_payload,
+            timeout=timeout
+        )
+        data = r.json()
+        if "choices" not in data:
+            raise Exception(data.get("error", {}).get("message", str(data)))
+        content = data["choices"][0]["message"]["content"] or ""
+        if not content.strip():
+            raise Exception("空応答")
+        return content
+
+    future = _OPENROUTER_SINGLE_EXECUTOR.submit(_do_request)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        raise Exception(f"{model}: {timeout}秒以内に応答なし(ハードタイムアウト、実際の生成は裏で継続中の可能性あり)")
 
 
 def call_vision(text, image_b64, mime_type="image/jpeg"):
@@ -1172,7 +1192,7 @@ def _handle_patch_request(instruction, session_id):
         }
 
     def _llm_call_single(model, messages):
-        return call_openrouter_single(model, messages, max_tokens=8000, temperature=0.3, response_format="json_object")
+        return call_openrouter_single(model, messages, max_tokens=8000, temperature=0.3, response_format="json_object", timeout=90)
 
     MAX_REFINE_RETRIES = 1  # 2026-07-28: 無料枠モデルの1試行が長時間化(45秒timeout指定でも実測60〜130秒超)することが判明したため、3ラウンド→2ラウンドに短縮して最悪ケースの待ち時間を抑制
     original_instruction = instruction
