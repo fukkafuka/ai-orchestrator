@@ -13,6 +13,10 @@ git commit提案というツールを与え、タスクが完了するまで自�
 - run_command(診断・テスト用のコマンド実行)とgit_commitは、モデルが「提案」し、
   人間が承認してから初めて実行される(auto_patch.pyの承認待ちパッチと同じ設計思想)
 - run_commandはホワイトリストに前方一致するコマンドのみ許可(任意コマンド実行はさせない)
+- write_fileはfolder_aliases.json/folder_agent.py自身/.env系/ログファイル自体への
+  書き込みを拒否する(_PROTECTED_FILENAMES、自己権限拡張・自己無効化の防止。2026-09-14追加)
+- write_fileの呼び出しは許可/拒否に関わらずWRITE_LOG_FILEに永続記録する
+  (agent_sessionsと違いfinish_task後も残る監査ログ。2026-09-14追加)
 - 最大ステップ数の上限で暴走を防止
 - ループの途中状態(会話履歴・承認待ちの提案内容)はDBに保存し、セッションをまたいで再開できる
 
@@ -24,16 +28,39 @@ import os
 import re
 import sqlite3
 import subprocess
+import sys
 import time
+from datetime import datetime
 
 import requests
 
 from model_status import filter_alive_models
 
+_SANITIZER_PATH = os.path.expanduser("~/.config/ai-keys")
+if _SANITIZER_PATH not in sys.path:
+    sys.path.insert(0, _SANITIZER_PATH)
+try:
+    from secret_sanitizer import sanitize_secrets as _sanitize_secrets
+except Exception:
+    def _sanitize_secrets(text):
+        return text
+
 MAX_STEPS = 20
 MAX_FILE_READ_BYTES = 60_000
 MAX_FILE_LIST_ENTRIES = 400
 COMMAND_TIMEOUT = 60
+
+# write_fileの呼び出しを必ず記録する永続ログ(agent_sessionsと違いfinish_task後も消えない)。
+# orchestrator_v4.pyのLOG_FILEと同じ追記専用パターン。
+WRITE_LOG_FILE = "/Users/fk/Logs/folder_agent_write.log"
+
+# write_fileでの書き込みを拒否するファイル名(basename一致)。
+# folder_aliases.json: このエージェントのスコープ定義そのもの(自己権限拡張の防止)
+# folder_agent.py: このモジュール自身(承認/ログ機構を自己書き換えで無効化されるのを防止)
+_PROTECTED_FILENAMES = {
+    "folder_aliases.json",
+    "folder_agent.py",
+}
 
 # run_commandで許可するコマンドの前方一致ホワイトリスト。
 # 診断・テスト・確認用途のみ。ファイルを書き換えたり外部に影響を与えるものは含めない。
@@ -251,11 +278,52 @@ def tool_read_file(target_folder, path):
     return text
 
 
-def tool_write_file(target_folder, path, content):
+def _is_protected_path(target_folder, full_path):
+    """write_fileでの書き込みを拒否すべきパスかどうかを判定する。
+    設定ファイル・エージェント自身・.env系・ログファイル自体・.git配下を対象とし、
+    target_folderのどこに配置されていてもbasename/パターンで判定する。"""
+    name = os.path.basename(full_path)
+    if name in _PROTECTED_FILENAMES:
+        return True
+    if name == ".env" or name.startswith(".env."):
+        return True
+    if os.path.abspath(full_path) == os.path.abspath(WRITE_LOG_FILE):
+        return True
+    rel = os.path.relpath(full_path, target_folder)
+    if rel == ".git" or rel.startswith(".git" + os.sep):
+        # .git/hooks配下の書き換え(サプライチェーン攻撃の典型的な手口)等を防ぐ
+        return True
+    return False
+
+
+def log_write_file(session_id, target_folder, path, content, allowed, reason=""):
+    """write_fileの呼び出しを承認フローの有無に関わらず必ず永続ログに記録する。
+    agent_sessionsテーブルと違いfinish_task/セッション終了後も残る。"""
+    try:
+        os.makedirs(os.path.dirname(WRITE_LOG_FILE), exist_ok=True)
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        status = "ALLOWED" if allowed else "BLOCKED"
+        preview = _sanitize_secrets(content[:200]).replace("\n", "\\n")
+        line = (f"📁[{ts}] {status} session={session_id} target={target_folder} "
+                f"path={path} len={len(content)}"
+                + (f" reason={reason}" if reason else "")
+                + f" preview={preview}")
+        with open(WRITE_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        pass  # ログ失敗が本処理(書き込み可否判定)を止めないようにする
+
+
+def tool_write_file(target_folder, path, content, session_id="unknown"):
     full = _safe_join(target_folder, path)
+    if _is_protected_path(target_folder, full):
+        log_write_file(session_id, target_folder, path, content, allowed=False,
+                        reason="protected_path")
+        return f"❌ このファイルへの書き込みは保護のため拒否されました: {path}"
     os.makedirs(os.path.dirname(full), exist_ok=True)
     with open(full, "w", encoding="utf-8") as f:
         f.write(content)
+    log_write_file(session_id, target_folder, path, content, allowed=True)
     return f"✅ 書き込み完了: {path} ({len(content)}文字)"
 
 
@@ -464,7 +532,8 @@ def run_loop(db_path, session_id, target_folder, task, messages, step_count):
             elif fn_name == "read_file":
                 result = tool_read_file(target_folder, args.get("path", ""))
             elif fn_name == "write_file":
-                result = tool_write_file(target_folder, args.get("path", ""), args.get("content", ""))
+                result = tool_write_file(target_folder, args.get("path", ""), args.get("content", ""),
+                                          session_id=session_id)
             else:
                 result = f"❌ 未知のツール: {fn_name}"
         except Exception as e:
