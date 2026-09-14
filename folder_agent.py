@@ -17,6 +17,10 @@ git commit提案というツールを与え、タスクが完了するまで自�
   書き込みを拒否する(_PROTECTED_FILENAMES、自己権限拡張・自己無効化の防止。2026-09-14追加)
 - write_fileの呼び出しは許可/拒否に関わらずWRITE_LOG_FILEに永続記録する
   (agent_sessionsと違いfinish_task後も残る監査ログ。2026-09-14追加)
+- write_fileのうち既存ファイルの上書きは、run_command/git_commitと同じ承認フロー
+  (diff提示→「承認」「キャンセル」)を経てから実行される。新規ファイル作成は
+  低リスクなため引き続き自動実行(ログのみ)。保護ファイル(上記)は承認を経ずに
+  即座に拒否される(2026-09-14追加)
 - 最大ステップ数の上限で暴走を防止
 - ループの途中状態(会話履歴・承認待ちの提案内容)はDBに保存し、セッションをまたいで再開できる
 
@@ -30,6 +34,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import difflib
 from datetime import datetime
 
 import requests
@@ -327,6 +332,37 @@ def tool_write_file(target_folder, path, content, session_id="unknown"):
     return f"✅ 書き込み完了: {path} ({len(content)}文字)"
 
 
+def _make_write_diff(full_path, new_content, max_lines=60):
+    """既存ファイルとの差分をunified diff形式で生成する(既存ファイル上書き提案の表示用)。
+    大きすぎる場合は先頭max_lines行で切り詰める。"""
+    try:
+        with open(full_path, "r", encoding="utf-8", errors="replace") as f:
+            old_content = f.read()
+    except Exception:
+        old_content = ""
+    old_lines = old_content.splitlines(keepends=True)
+    new_lines = new_content.splitlines(keepends=True)
+    diff = list(difflib.unified_diff(old_lines, new_lines, fromfile="現在", tofile="変更後", lineterm=""))
+    if not diff:
+        return "(内容に差分はありません)"
+    truncated = len(diff) > max_lines
+    diff_text = "\n".join(diff[:max_lines])
+    if truncated:
+        diff_text += f"\n... (以降省略、全{len(diff)}行中先頭{max_lines}行を表示)"
+    return "```diff\n" + diff_text + "\n```"
+
+
+def execute_approved_write(target_folder, proposed_value, session_id):
+    """承認された既存ファイル上書きを実行する。保護チェック・ログはtool_write_file内で完結。"""
+    try:
+        data = json.loads(proposed_value)
+        path = data.get("path", "")
+        content = data.get("content", "")
+    except Exception:
+        return "❌ 保留中の書き込み内容の読み込みに失敗しました"
+    return tool_write_file(target_folder, path, content, session_id=session_id)
+
+
 def execute_approved_command(target_folder, command):
     if not is_command_allowed(command):
         return (
@@ -525,15 +561,34 @@ def run_loop(db_path, session_id, target_folder, task, messages, step_count):
                                 waiting_for="commit", proposed_value=message)
             return f"📝 git commitの提案があります:\nメッセージ: {message}\n\n実行してよければ「承認」、やめるなら「キャンセル」と送ってください。"
 
-        # list_files / read_file / write_file は自動実行
+        if fn_name == "write_file":
+            path = args.get("path", "")
+            content = args.get("content", "")
+            try:
+                full = _safe_join(target_folder, path)
+            except ValueError as e:
+                messages.append({"role": "tool", "tool_call_id": call["id"], "content": f"❌ エラー: {e}"})
+                continue
+            # 保護ファイル(C)は承認を挟む意味がないのでtool_write_file側で即座に拒否させる。
+            # 新規ファイル作成は低リスクなので自動実行(ログのみ)。
+            # 既存ファイルの上書きだけ承認フローに乗せる(A、2026-09-14追加)。
+            if not _is_protected_path(target_folder, full) and os.path.isfile(full):
+                diff_text = _make_write_diff(full, content)
+                proposed_value = json.dumps({"path": path, "content": content}, ensure_ascii=False)
+                save_agent_session(db_path, session_id, target_folder, task, messages, step_count,
+                                    waiting_for="write", proposed_value=proposed_value)
+                return (f"✏️ 既存ファイルの上書き提案があります: {path}\n\n{diff_text}\n\n"
+                        f"実行してよければ「承認」、やめるなら「キャンセル」と送ってください。")
+            result = tool_write_file(target_folder, path, content, session_id=session_id)
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": result})
+            continue
+
+        # list_files / read_file は自動実行
         try:
             if fn_name == "list_files":
                 result = tool_list_files(target_folder, args.get("subpath", ""))
             elif fn_name == "read_file":
                 result = tool_read_file(target_folder, args.get("path", ""))
-            elif fn_name == "write_file":
-                result = tool_write_file(target_folder, args.get("path", ""), args.get("content", ""),
-                                          session_id=session_id)
             else:
                 result = f"❌ 未知のツール: {fn_name}"
         except Exception as e:
@@ -588,6 +643,8 @@ def resume_after_command(db_path, session_id, approved):
         result = execute_approved_command(target_folder, proposed_value)
     elif waiting_for == "commit":
         result = execute_approved_commit(target_folder, proposed_value)
+    elif waiting_for == "write":
+        result = execute_approved_write(target_folder, proposed_value, session_id)
     else:
         result = "(不明な状態)"
 
