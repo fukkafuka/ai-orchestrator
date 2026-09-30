@@ -21,6 +21,10 @@ git commit提案というツールを与え、タスクが完了するまで自�
   (diff提示→「承認」「キャンセル」)を経てから実行される。新規ファイル作成は
   低リスクなため引き続き自動実行(ログのみ)。保護ファイル(上記)は承認を経ずに
   即座に拒否される(2026-09-14追加)
+- _is_protected_pathは大文字小文字を無視して判定する(macOS/APFSの大文字小文字
+  非区別に対応、2026-09-16のレッドチーム検証で発見・修正)
+- delete_agent_sessionは呼び出し時にテーブルを初期化する(真新しいDBでの
+  例外を防止、2026-09-16修正)
 - 最大ステップ数の上限で暴走を防止
 - ループの途中状態(会話履歴・承認待ちの提案内容)はDBに保存し、セッションをまたいで再開できる
 
@@ -152,6 +156,7 @@ def get_agent_session(db_path, session_id, timeout_seconds=86400):
 
 
 def delete_agent_session(db_path, session_id):
+    _init_table(db_path)
     conn = sqlite3.connect(db_path)
     conn.execute("DELETE FROM agent_sessions WHERE session_id=?", (session_id,))
     conn.commit()
@@ -286,8 +291,11 @@ def tool_read_file(target_folder, path):
 def _is_protected_path(target_folder, full_path):
     """write_fileでの書き込みを拒否すべきパスかどうかを判定する。
     設定ファイル・エージェント自身・.env系・ログファイル自体・.git配下を対象とし、
-    target_folderのどこに配置されていてもbasename/パターンで判定する。"""
-    name = os.path.basename(full_path)
+    target_folderのどこに配置されていてもbasename/パターンで判定する。
+    大文字小文字を無視して比較する(macOS標準のAPFSは大文字小文字を区別しないため、
+    大文字化したパス指定でこの判定だけすり抜けても実ファイルは同一になり得る。
+    2026-09-16のレッドチーム検証で発見・修正)。"""
+    name = os.path.basename(full_path).lower()
     if name in _PROTECTED_FILENAMES:
         return True
     if name == ".env" or name.startswith(".env."):
@@ -295,7 +303,8 @@ def _is_protected_path(target_folder, full_path):
     if os.path.abspath(full_path) == os.path.abspath(WRITE_LOG_FILE):
         return True
     rel = os.path.relpath(full_path, target_folder)
-    if rel == ".git" or rel.startswith(".git" + os.sep):
+    if rel == ".git" or rel.startswith(".git" + os.sep) or rel.lower() == ".git" or \
+            rel.lower().startswith(".git" + os.sep):
         # .git/hooks配下の書き換え(サプライチェーン攻撃の典型的な手口)等を防ぐ
         return True
     return False
